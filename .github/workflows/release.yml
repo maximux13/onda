@@ -1,0 +1,41 @@
+name: Release Onda macOS App
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test
+
+      - name: Build release Onda.app bundle
+        run: ./scripts/bundle_app.sh release
+
+      - name: Package .zip archive for GitHub Release
+        run: |
+          cd target/release
+          ditto -c -k --sequesterRsrc --keepParent Onda.app Onda-macos-arm64.zip
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/Onda-macos-arm64.zip
+          generate_release_notes: true

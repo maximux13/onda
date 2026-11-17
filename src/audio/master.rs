@@ -1,0 +1,475 @@
+#![allow(dead_code)]
+use std::ffi::c_void;
+use std::mem::size_of;
+use std::ptr::{self, NonNull};
+
+use objc2_core_audio::{
+    kAudioDevicePropertyDeviceNameCFString, kAudioDevicePropertyDeviceUID,
+    kAudioDevicePropertyMute, kAudioDevicePropertyStreamConfiguration,
+    kAudioDevicePropertyVolumeScalar, kAudioHardwarePropertyDefaultInputDevice,
+    kAudioHardwarePropertyDefaultOutputDevice, kAudioHardwarePropertyDevices,
+    kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeGlobal,
+    kAudioObjectPropertyScopeOutput, kAudioObjectSystemObject, AudioObjectGetPropertyData,
+    AudioObjectGetPropertyDataSize, AudioObjectHasProperty, AudioObjectID,
+    AudioObjectIsPropertySettable, AudioObjectPropertyAddress, AudioObjectPropertySelector,
+    AudioObjectSetPropertyData,
+};
+use objc2_core_audio_types::{AudioBuffer, AudioBufferList};
+use objc2_core_foundation::{CFRetained, CFString};
+
+use crate::state::{DeviceIconKind, MasterState, OutputDeviceInfo};
+
+/// `kAudioHardwareServiceDeviceProperty_VirtualMainVolume` (`'vmvc'`) from AudioToolbox.
+const K_AUDIO_HARDWARE_SERVICE_DEVICE_PROPERTY_VIRTUAL_MAIN_VOLUME: AudioObjectPropertySelector =
+    0x766d7663;
+
+fn system_object_id() -> AudioObjectID {
+    kAudioObjectSystemObject as AudioObjectID
+}
+
+fn has_settable_property(object_id: AudioObjectID, address: &AudioObjectPropertyAddress) -> bool {
+    if !unsafe { AudioObjectHasProperty(object_id, NonNull::from(address)) } {
+        return false;
+    }
+    let mut settable = 0u8;
+    let status = unsafe {
+        AudioObjectIsPropertySettable(
+            object_id,
+            NonNull::from(address),
+            NonNull::from(&mut settable),
+        )
+    };
+    status == 0 && settable != 0
+}
+
+fn get_cfstring_property(
+    object_id: AudioObjectID,
+    address: &AudioObjectPropertyAddress,
+) -> Option<String> {
+    let mut cf_ptr: *mut CFString = ptr::null_mut();
+    let mut data_size = size_of::<*mut CFString>() as u32;
+    let status = unsafe {
+        AudioObjectGetPropertyData(
+            object_id,
+            NonNull::from(address),
+            0,
+            ptr::null(),
+            NonNull::from(&mut data_size),
+            NonNull::from(&mut cf_ptr).cast::<c_void>(),
+        )
+    };
+    if status != 0 {
+        return None;
+    }
+    let non_null = NonNull::new(cf_ptr)?;
+    let retained: CFRetained<CFString> = unsafe { CFRetained::from_raw(non_null) };
+    Some(retained.to_string())
+}
+
+fn get_f32_property(object_id: AudioObjectID, address: &AudioObjectPropertyAddress) -> Option<f32> {
+    let mut value: f32 = 0.0;
+    let mut data_size = size_of::<f32>() as u32;
+    let status = unsafe {
+        AudioObjectGetPropertyData(
+            object_id,
+            NonNull::from(address),
+            0,
+            ptr::null(),
+            NonNull::from(&mut data_size),
+            NonNull::from(&mut value).cast::<c_void>(),
+        )
+    };
+    if status == 0 {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+fn set_f32_property(
+    object_id: AudioObjectID,
+    address: &AudioObjectPropertyAddress,
+    value: f32,
+) -> Result<(), String> {
+    let status = unsafe {
+        AudioObjectSetPropertyData(
+            object_id,
+            NonNull::from(address),
+            0,
+            ptr::null(),
+            size_of::<f32>() as u32,
+            NonNull::from(&value).cast::<c_void>(),
+        )
+    };
+    if status == 0 {
+        Ok(())
+    } else {
+        Err(format!("AudioObjectSetPropertyData failed with OSStatus {status}"))
+    }
+}
+
+fn get_u32_property(object_id: AudioObjectID, address: &AudioObjectPropertyAddress) -> Option<u32> {
+    let mut value: u32 = 0;
+    let mut data_size = size_of::<u32>() as u32;
+    let status = unsafe {
+        AudioObjectGetPropertyData(
+            object_id,
+            NonNull::from(address),
+            0,
+            ptr::null(),
+            NonNull::from(&mut data_size),
+            NonNull::from(&mut value).cast::<c_void>(),
+        )
+    };
+    if status == 0 {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+fn set_u32_property(
+    object_id: AudioObjectID,
+    address: &AudioObjectPropertyAddress,
+    value: u32,
+) -> Result<(), String> {
+    let status = unsafe {
+        AudioObjectSetPropertyData(
+            object_id,
+            NonNull::from(address),
+            0,
+            ptr::null(),
+            size_of::<u32>() as u32,
+            NonNull::from(&value).cast::<c_void>(),
+        )
+    };
+    if status == 0 {
+        Ok(())
+    } else {
+        Err(format!("AudioObjectSetPropertyData failed with OSStatus {status}"))
+    }
+}
+
+fn get_device_name(device_id: u32) -> Option<String> {
+    let name_addr = AudioObjectPropertyAddress {
+        mSelector: kAudioDevicePropertyDeviceNameCFString,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain,
+    };
+    get_cfstring_property(device_id, &name_addr).filter(|s| !s.is_empty())
+}
+
+pub fn get_device_volume(device_id: u32) -> f32 {
+    let virtual_vol_addr = AudioObjectPropertyAddress {
+        mSelector: K_AUDIO_HARDWARE_SERVICE_DEVICE_PROPERTY_VIRTUAL_MAIN_VOLUME,
+        mScope: kAudioObjectPropertyScopeOutput,
+        mElement: kAudioObjectPropertyElementMain,
+    };
+    let ch1_vol_addr = AudioObjectPropertyAddress {
+        mSelector: kAudioDevicePropertyVolumeScalar,
+        mScope: kAudioObjectPropertyScopeOutput,
+        mElement: 1,
+    };
+    get_f32_property(device_id, &virtual_vol_addr)
+        .or_else(|| get_f32_property(device_id, &ch1_vol_addr))
+        .unwrap_or(1.0)
+        .clamp(0.0, 1.0)
+}
+
+pub fn get_device_mute(device_id: u32) -> bool {
+    let mute_addr = AudioObjectPropertyAddress {
+        mSelector: kAudioDevicePropertyMute,
+        mScope: kAudioObjectPropertyScopeOutput,
+        mElement: kAudioObjectPropertyElementMain,
+    };
+    get_u32_property(device_id, &mute_addr)
+        .map(|v| v != 0)
+        .unwrap_or(false)
+}
+
+fn device_output_channel_count(device_id: u32) -> u32 {
+    let address = AudioObjectPropertyAddress {
+        mSelector: kAudioDevicePropertyStreamConfiguration,
+        mScope: kAudioObjectPropertyScopeOutput,
+        mElement: kAudioObjectPropertyElementMain,
+    };
+    let mut data_size: u32 = 0;
+    let status = unsafe {
+        AudioObjectGetPropertyDataSize(
+            device_id,
+            NonNull::from(&address),
+            0,
+            ptr::null(),
+            NonNull::from(&mut data_size),
+        )
+    };
+    if status != 0 || (data_size as usize) < size_of::<u32>() {
+        return 0;
+    }
+
+    let words = (data_size as usize).div_ceil(size_of::<u64>());
+    let mut storage = vec![0u64; words];
+    let Some(out_ptr) = NonNull::new(storage.as_mut_ptr().cast::<c_void>()) else {
+        return 0;
+    };
+    let status = unsafe {
+        AudioObjectGetPropertyData(
+            device_id,
+            NonNull::from(&address),
+            0,
+            ptr::null(),
+            NonNull::from(&mut data_size),
+            out_ptr,
+        )
+    };
+    if status != 0 || (data_size as usize) < size_of::<AudioBufferList>() {
+        return 0;
+    }
+
+    let abl = unsafe { &*(storage.as_ptr() as *const AudioBufferList) };
+    let num_buffers = abl.mNumberBuffers as usize;
+    if num_buffers == 0 {
+        return 0;
+    }
+
+    let max_buffers = 1 + (data_size as usize - size_of::<AudioBufferList>()) / size_of::<AudioBuffer>();
+    let count = num_buffers.min(max_buffers);
+    let buffers = unsafe { std::slice::from_raw_parts(abl.mBuffers.as_ptr(), count) };
+    buffers.iter().map(|b| b.mNumberChannels).sum()
+}
+
+fn infer_device_icon(name: &str, uid: &str) -> DeviceIconKind {
+    let haystack = format!("{} {}", name.to_lowercase(), uid.to_lowercase());
+    if haystack.contains("airpods") {
+        DeviceIconKind::AirPods
+    } else if haystack.contains("headphone")
+        || haystack.contains("wh-")
+        || haystack.contains("buds")
+        || haystack.contains("beats")
+    {
+        DeviceIconKind::Headphones
+    } else if haystack.contains("blackhole")
+        || haystack.contains("soundflower")
+        || haystack.contains("virtual")
+        || haystack.contains("multi")
+    {
+        DeviceIconKind::Virtual
+    } else if haystack.contains("hdmi")
+        || haystack.contains("display")
+        || haystack.contains("monitor")
+        || haystack.contains("lg")
+        || haystack.contains("dell")
+        || haystack.contains("kg")
+    {
+        DeviceIconKind::Display
+    } else {
+        DeviceIconKind::Speaker
+    }
+}
+
+/// Returns the `AudioObjectID` of the current default system output device.
+pub fn get_default_output_device() -> Option<u32> {
+    let address = AudioObjectPropertyAddress {
+        mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain,
+    };
+    get_u32_property(system_object_id(), &address).filter(|&id| id != 0)
+}
+
+/// Returns the display name of the current default system input device.
+pub fn get_default_input_device_name() -> String {
+    let address = AudioObjectPropertyAddress {
+        mSelector: kAudioHardwarePropertyDefaultInputDevice,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain,
+    };
+    get_u32_property(system_object_id(), &address)
+        .filter(|&id| id != 0)
+        .and_then(get_device_name)
+        .unwrap_or_else(|| String::from("Microphone"))
+}
+
+/// Returns the persistent UID string for the given CoreAudio device ID.
+pub fn get_device_uid(device_id: u32) -> Option<String> {
+    let address = AudioObjectPropertyAddress {
+        mSelector: kAudioDevicePropertyDeviceUID,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain,
+    };
+    get_cfstring_property(device_id, &address)
+}
+
+/// Lists all active output audio devices on the system (excluding internal process tap aggregates).
+pub fn list_output_devices() -> Vec<OutputDeviceInfo> {
+    let address = AudioObjectPropertyAddress {
+        mSelector: kAudioHardwarePropertyDevices,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain,
+    };
+
+    let mut data_size: u32 = 0;
+    let status = unsafe {
+        AudioObjectGetPropertyDataSize(
+            system_object_id(),
+            NonNull::from(&address),
+            0,
+            ptr::null(),
+            NonNull::from(&mut data_size),
+        )
+    };
+    if status != 0 || data_size == 0 {
+        return Vec::new();
+    }
+
+    let count = data_size as usize / size_of::<AudioObjectID>();
+    let mut device_ids = vec![0 as AudioObjectID; count];
+    if let Some(out_ptr) = NonNull::new(device_ids.as_mut_ptr().cast::<c_void>()) {
+        let status = unsafe {
+            AudioObjectGetPropertyData(
+                system_object_id(),
+                NonNull::from(&address),
+                0,
+                ptr::null(),
+                NonNull::from(&mut data_size),
+                out_ptr,
+            )
+        };
+        if status != 0 {
+            return Vec::new();
+        }
+        let actual_count = data_size as usize / size_of::<AudioObjectID>();
+        device_ids.truncate(actual_count);
+    }
+
+    let default_output_id = get_default_output_device();
+    let mut devices = Vec::new();
+
+    for id in device_ids {
+        if device_output_channel_count(id) == 0 {
+            continue;
+        }
+        let Some(name) = get_device_name(id) else {
+            continue;
+        };
+        if name.starts_with("VolumeMixer-Tap-") {
+            continue;
+        }
+        let Some(uid) = get_device_uid(id) else {
+            continue;
+        };
+
+        let icon_kind = infer_device_icon(&name, &uid);
+        let is_default = default_output_id == Some(id);
+        let volume = get_device_volume(id);
+        let muted = get_device_mute(id);
+
+        devices.push(OutputDeviceInfo {
+            id,
+            uid,
+            name,
+            subtitle: None,
+            icon_kind,
+            is_default,
+            volume,
+            muted,
+        });
+    }
+
+    devices.sort_by(|a, b| {
+        b.is_default
+            .cmp(&a.is_default)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+
+    devices
+}
+
+/// Sets the volume of a specific output device, clamped to `0.0..=1.0`.
+pub fn set_device_volume(device_id: u32, volume: f32) -> Result<(), String> {
+    let clamped = volume.clamp(0.0, 1.0);
+
+    let virtual_vol_addr = AudioObjectPropertyAddress {
+        mSelector: K_AUDIO_HARDWARE_SERVICE_DEVICE_PROPERTY_VIRTUAL_MAIN_VOLUME,
+        mScope: kAudioObjectPropertyScopeOutput,
+        mElement: kAudioObjectPropertyElementMain,
+    };
+    if has_settable_property(device_id, &virtual_vol_addr) {
+        return set_f32_property(device_id, &virtual_vol_addr, clamped);
+    }
+
+    let mut set_any = false;
+    let mut last_err = None;
+    for channel in [1u32, 2u32] {
+        let ch_addr = AudioObjectPropertyAddress {
+            mSelector: kAudioDevicePropertyVolumeScalar,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: channel,
+        };
+        if has_settable_property(device_id, &ch_addr) {
+            match set_f32_property(device_id, &ch_addr, clamped) {
+                Ok(()) => set_any = true,
+                Err(err) => last_err = Some(err),
+            }
+        }
+    }
+
+    if set_any {
+        Ok(())
+    } else {
+        Err(last_err.unwrap_or_else(|| String::from("Output device has no settable volume property")))
+    }
+}
+
+/// Sets the mute state of a specific output device.
+pub fn set_device_mute(device_id: u32, muted: bool) -> Result<(), String> {
+    let mute_addr = AudioObjectPropertyAddress {
+        mSelector: kAudioDevicePropertyMute,
+        mScope: kAudioObjectPropertyScopeOutput,
+        mElement: kAudioObjectPropertyElementMain,
+    };
+    set_u32_property(device_id, &mute_addr, u32::from(muted))
+}
+
+/// Sets the system default output device.
+pub fn set_default_output_device(device_id: u32) -> Result<(), String> {
+    let address = AudioObjectPropertyAddress {
+        mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain,
+    };
+    set_u32_property(system_object_id(), &address, device_id)
+}
+
+/// Reads the current default output device's name, volume, and mute state.
+pub fn get_master_state() -> MasterState {
+    let Some(device_id) = get_default_output_device() else {
+        return MasterState::default();
+    };
+
+    let device_name = get_device_name(device_id)
+        .unwrap_or_else(|| MasterState::default().device_name);
+    let volume = get_device_volume(device_id);
+    let muted = get_device_mute(device_id);
+
+    MasterState {
+        device_name,
+        volume,
+        muted,
+    }
+}
+
+/// Sets the default output device's master volume, clamped to `0.0..=1.0`.
+pub fn set_master_volume(volume: f32) -> Result<(), String> {
+    let device_id =
+        get_default_output_device().ok_or_else(|| String::from("No default output device"))?;
+    set_device_volume(device_id, volume)
+}
+
+/// Sets the default output device's mute state.
+pub fn set_master_mute(muted: bool) -> Result<(), String> {
+    let device_id =
+        get_default_output_device().ok_or_else(|| String::from("No default output device"))?;
+    set_device_mute(device_id, muted)
+}

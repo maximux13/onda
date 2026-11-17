@@ -1,0 +1,19 @@
+[package]
+name = "onda"
+version = "0.1.0"
+edition = "2024"
+description = "Native macOS menu bar per-app volume mixer and 10-band equalizer built in Rust with GPUI"
+license = "MIT"
+
+[dependencies]
+gpui = { version = "0.2.2", features = ["runtime_shaders"] }
+tray-icon = "0.26.1"
+objc2 = "0.6"
+objc2-foundation = "0.3.2"
+objc2-app-kit = "0.3.2"
+objc2-core-audio = "0.3.2"
+objc2-core-audio-types = "0.3.2"
+objc2-core-foundation = "0.3.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
