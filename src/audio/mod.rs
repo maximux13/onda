@@ -10,8 +10,8 @@ pub mod tap;
 use std::collections::{HashMap, HashSet};
 
 use crate::state::{
-    AppRowState, AppVolumeConfig, AudioAppInfo, DeviceIconKind, MixerSnapshot, OutputDeviceInfo,
-    Preferences, ThemeMode, WindowStyle,
+    AppRowState, AppVolumeConfig, AudioAppInfo, DeviceIconKind, InputDeviceInfo, MixerSnapshot,
+    OutputDeviceInfo, Preferences, ThemeMode, WindowStyle,
 };
 use crate::storage::{JsonFileStore, PreferencesStore};
 use tap::AppTapHandle;
@@ -52,12 +52,16 @@ pub trait AudioBackend {
     type Tap: TapController;
 
     fn list_output_devices(&self) -> Vec<OutputDeviceInfo>;
+    fn list_input_devices(&self) -> Vec<InputDeviceInfo>;
     fn default_input_device_name(&self) -> String;
     fn default_output_device_uid(&self) -> Option<String>;
     fn fallback_master_name(&self) -> String;
     fn set_default_output_device(&self, device_id: u32);
     fn set_device_volume(&self, device_id: u32, volume: f32);
     fn set_device_mute(&self, device_id: u32, muted: bool);
+    fn set_default_input_device(&self, device_id: u32);
+    fn set_input_device_volume(&self, device_id: u32, volume: f32);
+    fn set_input_device_mute(&self, device_id: u32, muted: bool);
     fn list_audio_processes(&self, include_inactive: bool) -> Vec<AudioAppInfo>;
     fn create_process_tap(
         &self,
@@ -79,6 +83,10 @@ impl AudioBackend for CoreAudioBackend {
 
     fn list_output_devices(&self) -> Vec<OutputDeviceInfo> {
         master::list_output_devices()
+    }
+
+    fn list_input_devices(&self) -> Vec<InputDeviceInfo> {
+        master::list_input_devices()
     }
 
     fn default_input_device_name(&self) -> String {
@@ -103,6 +111,18 @@ impl AudioBackend for CoreAudioBackend {
 
     fn set_device_mute(&self, device_id: u32, muted: bool) {
         let _ = master::set_device_mute(device_id, muted);
+    }
+
+    fn set_default_input_device(&self, device_id: u32) {
+        let _ = master::set_default_input_device(device_id);
+    }
+
+    fn set_input_device_volume(&self, device_id: u32, volume: f32) {
+        let _ = master::set_input_device_volume(device_id, volume);
+    }
+
+    fn set_input_device_mute(&self, device_id: u32, muted: bool) {
+        let _ = master::set_input_device_mute(device_id, muted);
     }
 
     fn list_audio_processes(&self, include_inactive: bool) -> Vec<AudioAppInfo> {
@@ -284,6 +304,7 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
     /// reconciles per-app process taps, and returns a full [`MixerSnapshot`] for the UI.
     pub fn snapshot(&mut self) -> MixerSnapshot {
         let devices = self.backend.list_output_devices();
+        let input_devices = self.backend.list_input_devices();
         let default_input_name = self.backend.default_input_device_name();
         let processes = self.backend.list_audio_processes(self.prefs.show_all_apps);
 
@@ -363,6 +384,7 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
             default_output_name,
             default_input_name,
             devices,
+            input_devices,
             apps,
             theme: self.prefs.theme,
             window_style: self.prefs.window_style,
@@ -385,6 +407,18 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
 
     pub fn set_device_mute(&mut self, device_id: u32, muted: bool) {
         self.backend.set_device_mute(device_id, muted);
+    }
+
+    pub fn set_default_input_device(&mut self, device_id: u32) {
+        self.backend.set_default_input_device(device_id);
+    }
+
+    pub fn set_input_device_volume(&mut self, device_id: u32, volume: f32) {
+        self.backend.set_input_device_volume(device_id, volume);
+    }
+
+    pub fn set_input_device_mute(&mut self, device_id: u32, muted: bool) {
+        self.backend.set_input_device_mute(device_id, muted);
     }
 
     fn update_app_config(&mut self, bundle_id: &str, update: impl FnOnce(&mut AppVolumeConfig)) {
@@ -635,8 +669,12 @@ mod tests {
     #[derive(Clone, Default)]
     struct FakeBackend {
         devices: Rc<RefCell<Vec<OutputDeviceInfo>>>,
+        input_devices: Vec<InputDeviceInfo>,
         processes: Rc<RefCell<Vec<AudioAppInfo>>>,
         created_taps: Rc<RefCell<Vec<Rc<RefCell<FakeTapState>>>>>,
+        last_input_volume: Rc<RefCell<Option<(u32, f32)>>>,
+        last_input_mute: Rc<RefCell<Option<(u32, bool)>>>,
+        last_default_input: Rc<RefCell<Option<u32>>>,
     }
 
     impl FakeBackend {
@@ -647,8 +685,20 @@ mod tests {
             Self {
                 devices: Rc::new(RefCell::new(devices)),
                 processes: Rc::new(RefCell::new(processes)),
-                created_taps: Rc::new(RefCell::new(Vec::new())),
+                ..Default::default()
             }
+        }
+
+        fn last_input_volume(&self) -> Option<(u32, f32)> {
+            *self.last_input_volume.borrow()
+        }
+
+        fn last_input_mute(&self) -> Option<(u32, bool)> {
+            *self.last_input_mute.borrow()
+        }
+
+        fn last_default_input(&self) -> Option<u32> {
+            *self.last_default_input.borrow()
         }
     }
 
@@ -657,6 +707,10 @@ mod tests {
 
         fn list_output_devices(&self) -> Vec<OutputDeviceInfo> {
             self.devices.borrow().clone()
+        }
+
+        fn list_input_devices(&self) -> Vec<InputDeviceInfo> {
+            self.input_devices.clone()
         }
 
         fn default_input_device_name(&self) -> String {
@@ -678,6 +732,18 @@ mod tests {
         fn set_default_output_device(&self, _device_id: u32) {}
         fn set_device_volume(&self, _device_id: u32, _volume: f32) {}
         fn set_device_mute(&self, _device_id: u32, _muted: bool) {}
+
+        fn set_default_input_device(&self, device_id: u32) {
+            *self.last_default_input.borrow_mut() = Some(device_id);
+        }
+
+        fn set_input_device_volume(&self, device_id: u32, volume: f32) {
+            *self.last_input_volume.borrow_mut() = Some((device_id, volume));
+        }
+
+        fn set_input_device_mute(&self, device_id: u32, muted: bool) {
+            *self.last_input_mute.borrow_mut() = Some((device_id, muted));
+        }
 
         fn list_audio_processes(&self, include_inactive: bool) -> Vec<AudioAppInfo> {
             self.processes
@@ -922,5 +988,31 @@ mod tests {
             engine.resolve_target_uid(cfg).as_deref(),
             Some("uid-default")
         );
+    }
+
+    #[test]
+    fn snapshot_includes_input_devices_and_forwards_input_controls() {
+        let mut backend = FakeBackend::default();
+        backend.input_devices.push(InputDeviceInfo {
+            id: 42,
+            uid: "usb-mic-1".to_string(),
+            name: "Shure MV7".to_string(),
+            is_default: true,
+            volume: 0.8,
+            muted: false,
+        });
+        let mut engine = AudioEngine::with_backend_and_store(backend, MemoryStore::default());
+
+        let snap = engine.snapshot();
+        assert_eq!(snap.input_devices.len(), 1);
+        assert_eq!(snap.input_devices[0].name, "Shure MV7");
+
+        engine.set_input_device_volume(42, 0.45);
+        engine.set_input_device_mute(42, true);
+        engine.set_default_input_device(42);
+
+        assert_eq!(engine.backend.last_input_volume(), Some((42, 0.45)));
+        assert_eq!(engine.backend.last_input_mute(), Some((42, true)));
+        assert_eq!(engine.backend.last_default_input(), Some(42));
     }
 }

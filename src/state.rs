@@ -53,6 +53,17 @@ pub struct OutputDeviceInfo {
     pub muted: bool,
 }
 
+/// State of an individual macOS audio input device (microphone).
+#[derive(Clone, Debug, PartialEq)]
+pub struct InputDeviceInfo {
+    pub id: u32,
+    pub uid: String,
+    pub name: String,
+    pub is_default: bool,
+    pub volume: f32,
+    pub muted: bool,
+}
+
 /// Metadata for a running macOS application (with or without active audio output).
 #[derive(Clone, Debug)]
 pub struct AudioAppInfo {
@@ -139,6 +150,7 @@ pub struct MixerSnapshot {
     pub default_output_name: String,
     pub default_input_name: String,
     pub devices: Vec<OutputDeviceInfo>,
+    pub input_devices: Vec<InputDeviceInfo>,
     pub apps: Vec<AppRowState>,
     pub theme: ThemeMode,
     pub window_style: WindowStyle,
@@ -161,6 +173,7 @@ impl Default for MixerSnapshot {
             default_output_name: String::from("MacBook Pro Speakers"),
             default_input_name: String::from("MacBook Pro Microphone"),
             devices: Vec::new(),
+            input_devices: Vec::new(),
             apps: Vec::new(),
             theme: ThemeMode::Auto,
             window_style: WindowStyle::Transparent,
