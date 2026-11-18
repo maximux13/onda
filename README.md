@@ -9,7 +9,7 @@
   <img alt="Language" src="https://img.shields.io/badge/Rust-2024%20Edition-dea584?style=flat-square&logo=rust" />
   <img alt="UI" src="https://img.shields.io/badge/UI-GPUI%20(Metal)-2582ff?style=flat-square" />
   <img alt="License" src="https://img.shields.io/badge/license-MIT-30d158?style=flat-square" />
-  <img alt="Release" src="https://img.shields.io/badge/version-0.1.0-blueviolet?style=flat-square" />
+  <img alt="Release" src="https://img.shields.io/badge/version-0.2.0-blueviolet?style=flat-square" />
 </p>
 
 ---
@@ -101,9 +101,9 @@ The updater honors three optional environment variables for local testing:
 ## 🗺️ Roadmap & Future Updates
 
 ### `v0.2.0` — Global Shortcuts & Audio Ducking
-- [ ] **Global Keyboard Shortcuts:** Register system-wide hotkeys (`CGEventTap` / `global-hotkey`) to mute active app, cycle output devices, or open the mixer popover.
-- [ ] **Per-Input Microphone Control:** Mute and gain slider for input devices (`MacBook Pro Microphone`, external USB mics) from the top bar.
-- [ ] **Auto-Ducking:** Automatically lower music volume (e.g., Spotify) when voice apps (Discord, Zoom, Meet) output audio.
+- [x] **Global Keyboard Shortcuts:** Register system-wide hotkeys (`CGEventTap` / `global-hotkey`) to mute active app, cycle output devices, or open the mixer popover.
+- [x] **Per-Input Microphone Control:** Mute and gain slider for input devices (`MacBook Pro Microphone`, external USB mics) from the top bar.
+- [x] **Auto-Ducking:** Automatically lower music volume (e.g., Spotify) when voice apps (Discord, Zoom, Meet) output audio.
 
 ### `v0.3.0` — Audio Recording & Custom EQ Profiles
 - [ ] **Custom User EQ Presets:** Save, import, and export custom 10-band EQ curves.

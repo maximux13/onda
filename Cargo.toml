@@ -1,6 +1,6 @@
 [package]
 name = "onda"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Native macOS menu bar per-app volume mixer and 10-band equalizer built in Rust with GPUI"
 license = "MIT"

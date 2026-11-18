@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-18
+
 ### Added
+- **Global Keyboard Shortcuts (`src/hotkeys.rs`, `global-hotkey`):**
+  - System-wide hotkey registration for toggling the mixer popover (`TogglePopover`), muting/unmuting the active foreground application (`MuteActiveApp`), and cycling audio output devices (`CycleOutputDevice`).
+  - Interactive shortcut toggles and accelerator configuration in **Settings → Shortcuts** with persisted `ShortcutsConfig`.
+- **Per-Input Microphone Control (`src/audio/master.rs`, `src/ui/popover/mixer_view.rs`):**
+  - Core Audio input device discovery and per-device mute/gain control (`InputDeviceInfo`) for built-in and external microphones.
+  - Top-bar microphone mute button, gain slider, and input device selector popover synced with Core Audio hardware mute state.
+- **Auto-Ducking (`src/audio/mod.rs`, `src/ui/popover/`):**
+  - `DuckingTracker` hysteresis engine (`enabled`, `duck_amount`, `threshold`, `release_ms`, configurable voice and music bundle ID lists) that automatically attenuates music apps when voice apps emit audio.
+  - `"Ducked"` status badge on attenuated application rows and full Auto-Ducking controls in **Settings**.
 - **GitHub Releases Auto-Updater (`src/updater.rs`):**
   - Periodic background release checks (3s after launch, then every 6 hours) and manual checks from **Settings → About**.
   - Popover update banner, settings badge indicator, `.zip` download and `Onda.app` bundle replacement, quarantine xattr cleanup, and one-click relaunch.
