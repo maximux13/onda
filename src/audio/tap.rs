@@ -1,4 +1,3 @@
-use std::f32::consts::PI;
 use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::sync::Arc;
@@ -19,10 +18,8 @@ use objc2_core_audio_types::{AudioBufferList, AudioTimeStamp};
 use objc2_core_foundation::{CFArray, CFBoolean, CFDictionary, CFString, CFType};
 use objc2_foundation::{NSArray, NSNumber, NSUUID};
 
+use super::dsp::{self, BiquadBand};
 use crate::state::EQ_FREQUENCIES;
-
-const SAMPLE_RATE: f32 = 48_000.0;
-const BIQUAD_Q: f32 = 1.414;
 
 /// Errors returned when creating a Core Audio process tap.
 #[derive(Debug, thiserror::Error)]
@@ -37,78 +34,6 @@ pub enum TapError {
     CreateIoProcId(i32),
     #[error("AudioDeviceStart failed with OSStatus {0}")]
     StartDevice(i32),
-}
-
-#[derive(Clone, Copy)]
-struct BiquadBand {
-    b0: f32,
-    b1: f32,
-    b2: f32,
-    a1: f32,
-    a2: f32,
-    z1: [f32; 2],
-    z2: [f32; 2],
-    last_gain_db: f32,
-    active: bool,
-}
-
-impl BiquadBand {
-    const fn new() -> Self {
-        Self {
-            b0: 1.0,
-            b1: 0.0,
-            b2: 0.0,
-            a1: 0.0,
-            a2: 0.0,
-            z1: [0.0; 2],
-            z2: [0.0; 2],
-            last_gain_db: 0.0,
-            active: false,
-        }
-    }
-
-    #[inline]
-    fn update_peaking(&mut self, f0: f32, gain_db: f32) {
-        self.last_gain_db = gain_db;
-        if gain_db.abs() < 0.05 {
-            self.b0 = 1.0;
-            self.b1 = 0.0;
-            self.b2 = 0.0;
-            self.a1 = 0.0;
-            self.a2 = 0.0;
-            self.active = false;
-            return;
-        }
-
-        let a = 10.0f32.powf(gain_db / 40.0);
-        let w0 = 2.0 * PI * f0 / SAMPLE_RATE;
-        let cos_w0 = w0.cos();
-        let sin_w0 = w0.sin();
-        let alpha = sin_w0 / (2.0 * BIQUAD_Q);
-
-        let b0 = 1.0 + alpha * a;
-        let b1 = -2.0 * cos_w0;
-        let b2 = 1.0 - alpha * a;
-        let a0 = 1.0 + alpha / a;
-        let a1 = -2.0 * cos_w0;
-        let a2 = 1.0 - alpha / a;
-
-        let inv_a0 = 1.0 / a0;
-        self.b0 = b0 * inv_a0;
-        self.b1 = b1 * inv_a0;
-        self.b2 = b2 * inv_a0;
-        self.a1 = a1 * inv_a0;
-        self.a2 = a2 * inv_a0;
-        self.active = true;
-    }
-
-    #[inline]
-    fn process(&mut self, x: f32, ch: usize) -> f32 {
-        let y = self.b0 * x + self.z1[ch];
-        self.z1[ch] = self.b1 * x - self.a1 * y + self.z2[ch];
-        self.z2[ch] = self.b2 * x - self.a2 * y;
-        y
-    }
 }
 
 struct TapContext {
@@ -255,54 +180,23 @@ unsafe extern "C-unwind" fn tap_io_proc(
             && in_buf.mDataByteSize > 0
         {
             let in_samples_len = (in_buf.mDataByteSize as usize) / std::mem::size_of::<f32>();
-            let count = out_samples_len.min(in_samples_len);
-            // SAFETY: `in_buf.mData` is non-null and has at least `count` `f32` samples.
+            // SAFETY: `in_buf.mData` is non-null and `mDataByteSize` is its valid byte length.
             let in_samples =
-                unsafe { std::slice::from_raw_parts(in_buf.mData as *const f32, count) };
+                unsafe { std::slice::from_raw_parts(in_buf.mData as *const f32, in_samples_len) };
 
-            if scale == 0.0 {
-                out_samples[..count].fill(0.0);
-            } else if !use_eq {
-                for (dst, &src) in out_samples[..count].iter_mut().zip(in_samples.iter()) {
-                    let s = src * scale;
-                    if s.abs() > max_abs {
-                        max_abs = s.abs();
-                    }
-                    *dst = s;
-                }
-            } else {
-                for (idx, (dst, &src)) in out_samples[..count]
-                    .iter_mut()
-                    .zip(in_samples.iter())
-                    .enumerate()
-                {
-                    let ch = if n_channels == 1 {
-                        i.min(1)
-                    } else {
-                        (idx % n_channels).min(1)
-                    };
-                    let mut s = src * scale;
-                    for band in &mut ctx.bands {
-                        if band.active {
-                            s = band.process(s, ch);
-                        }
-                    }
-                    if !s.is_finite() {
-                        s = 0.0;
-                    }
-                    if s.abs() > max_abs {
-                        max_abs = s.abs();
-                    }
-                    *dst = s;
-                }
-            }
-            if count < out_samples_len {
-                out_samples[count..].fill(0.0);
-            }
-            continue;
+            let buf_peak = dsp::process_interleaved_f32(
+                in_samples,
+                out_samples,
+                i,
+                n_channels,
+                scale,
+                use_eq,
+                &mut ctx.bands,
+            );
+            max_abs = max_abs.max(buf_peak);
+        } else {
+            out_samples.fill(0.0);
         }
-
-        out_samples.fill(0.0);
     }
 
     let prev = f32::from_bits(ctx.peak.load(Ordering::Relaxed));
@@ -486,46 +380,4 @@ pub fn create_process_tap(
         output_device_uid: output_device_uid.to_string(),
         ctx_ptr,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_biquad_flat_is_identity() {
-        let mut band = BiquadBand::new();
-        band.update_peaking(1000.0, 0.0);
-
-        for i in 0..32 {
-            let input = ((i as f32) * 0.2).sin();
-            let output = band.process(input, 0);
-            assert!((output - input).abs() < 1e-6);
-        }
-    }
-
-    #[test]
-    fn test_biquad_boost_and_cut_modify_signal() {
-        let mut boost_band = BiquadBand::new();
-        boost_band.update_peaking(1000.0, 6.0);
-
-        let mut cut_band = BiquadBand::new();
-        cut_band.update_peaking(1000.0, -6.0);
-
-        let mut boost_energy = 0.0f32;
-        let mut cut_energy = 0.0f32;
-
-        // 1 kHz sine wave at 48 kHz sample rate
-        for n in 0..480 {
-            let sample = (2.0 * std::f32::consts::PI * 1000.0 * (n as f32) / 48_000.0).sin();
-            let b_out = boost_band.process(sample, 0);
-            let c_out = cut_band.process(sample, 0);
-            if n > 48 {
-                boost_energy += b_out * b_out;
-                cut_energy += c_out * c_out;
-            }
-        }
-
-        assert!(boost_energy > cut_energy * 2.0);
-    }
 }

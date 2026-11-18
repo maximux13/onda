@@ -3,6 +3,7 @@ mod app_colors;
 mod app_icons;
 mod core_audio;
 pub mod discovery;
+mod dsp;
 pub mod master;
 pub mod tap;
 
