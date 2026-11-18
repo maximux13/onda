@@ -3,9 +3,7 @@ use std::sync::mpsc::{self, Receiver};
 
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
-use tray_icon::{
-    Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent,
-};
+use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 /// Commands emitted by the macOS menu bar tray icon.
 #[derive(Debug, Clone, Copy)]

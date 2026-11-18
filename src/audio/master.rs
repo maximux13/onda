@@ -4,15 +4,15 @@ use std::mem::size_of;
 use std::ptr::{self, NonNull};
 
 use objc2_core_audio::{
+    AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize, AudioObjectHasProperty,
+    AudioObjectID, AudioObjectIsPropertySettable, AudioObjectPropertyAddress,
+    AudioObjectPropertySelector, AudioObjectSetPropertyData,
     kAudioDevicePropertyDeviceNameCFString, kAudioDevicePropertyDeviceUID,
     kAudioDevicePropertyMute, kAudioDevicePropertyStreamConfiguration,
     kAudioDevicePropertyVolumeScalar, kAudioHardwarePropertyDefaultInputDevice,
     kAudioHardwarePropertyDefaultOutputDevice, kAudioHardwarePropertyDevices,
     kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeGlobal,
-    kAudioObjectPropertyScopeOutput, kAudioObjectSystemObject, AudioObjectGetPropertyData,
-    AudioObjectGetPropertyDataSize, AudioObjectHasProperty, AudioObjectID,
-    AudioObjectIsPropertySettable, AudioObjectPropertyAddress, AudioObjectPropertySelector,
-    AudioObjectSetPropertyData,
+    kAudioObjectPropertyScopeOutput, kAudioObjectSystemObject,
 };
 use objc2_core_audio_types::{AudioBuffer, AudioBufferList};
 use objc2_core_foundation::{CFRetained, CFString};
@@ -79,11 +79,7 @@ fn get_f32_property(object_id: AudioObjectID, address: &AudioObjectPropertyAddre
             NonNull::from(&mut value).cast::<c_void>(),
         )
     };
-    if status == 0 {
-        Some(value)
-    } else {
-        None
-    }
+    if status == 0 { Some(value) } else { None }
 }
 
 fn set_f32_property(
@@ -104,7 +100,9 @@ fn set_f32_property(
     if status == 0 {
         Ok(())
     } else {
-        Err(format!("AudioObjectSetPropertyData failed with OSStatus {status}"))
+        Err(format!(
+            "AudioObjectSetPropertyData failed with OSStatus {status}"
+        ))
     }
 }
 
@@ -121,11 +119,7 @@ fn get_u32_property(object_id: AudioObjectID, address: &AudioObjectPropertyAddre
             NonNull::from(&mut value).cast::<c_void>(),
         )
     };
-    if status == 0 {
-        Some(value)
-    } else {
-        None
-    }
+    if status == 0 { Some(value) } else { None }
 }
 
 fn set_u32_property(
@@ -146,7 +140,9 @@ fn set_u32_property(
     if status == 0 {
         Ok(())
     } else {
-        Err(format!("AudioObjectSetPropertyData failed with OSStatus {status}"))
+        Err(format!(
+            "AudioObjectSetPropertyData failed with OSStatus {status}"
+        ))
     }
 }
 
@@ -232,7 +228,8 @@ fn device_output_channel_count(device_id: u32) -> u32 {
         return 0;
     }
 
-    let max_buffers = 1 + (data_size as usize - size_of::<AudioBufferList>()) / size_of::<AudioBuffer>();
+    let max_buffers =
+        1 + (data_size as usize - size_of::<AudioBufferList>()) / size_of::<AudioBuffer>();
     let count = num_buffers.min(max_buffers);
     let buffers = unsafe { std::slice::from_raw_parts(abl.mBuffers.as_ptr(), count) };
     buffers.iter().map(|b| b.mNumberChannels).sum()
@@ -418,7 +415,8 @@ pub fn set_device_volume(device_id: u32, volume: f32) -> Result<(), String> {
     if set_any {
         Ok(())
     } else {
-        Err(last_err.unwrap_or_else(|| String::from("Output device has no settable volume property")))
+        Err(last_err
+            .unwrap_or_else(|| String::from("Output device has no settable volume property")))
     }
 }
 
@@ -448,8 +446,8 @@ pub fn get_master_state() -> MasterState {
         return MasterState::default();
     };
 
-    let device_name = get_device_name(device_id)
-        .unwrap_or_else(|| MasterState::default().device_name);
+    let device_name =
+        get_device_name(device_id).unwrap_or_else(|| MasterState::default().device_name);
     let volume = get_device_volume(device_id);
     let muted = get_device_mute(device_id);
 

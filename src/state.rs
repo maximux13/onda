@@ -253,16 +253,20 @@ mod tests {
 
     #[test]
     fn test_preferences_json_roundtrip() {
-        let mut prefs = Preferences::default();
-        prefs.theme = ThemeMode::Dark;
-        prefs.window_style = WindowStyle::Transparent;
-        prefs.max_volume_limit = 1.5;
+        let mut prefs = Preferences {
+            theme: ThemeMode::Dark,
+            window_style: WindowStyle::Transparent,
+            max_volume_limit: 1.5,
+            ..Default::default()
+        };
         prefs.global_eq_gains[0] = 4.5;
         prefs.global_eq_gains[9] = -3.0;
 
-        let mut app_cfg = AppVolumeConfig::default();
-        app_cfg.volume = 0.75;
-        app_cfg.boost_enabled = true;
+        let mut app_cfg = AppVolumeConfig {
+            volume: 0.75,
+            boost_enabled: true,
+            ..Default::default()
+        };
         app_cfg.eq_gains[3] = 2.0;
         prefs.apps.insert("com.spotify.client".to_string(), app_cfg);
 
@@ -275,7 +279,10 @@ mod tests {
         assert_eq!(restored.global_eq_gains[0], 4.5);
         assert_eq!(restored.global_eq_gains[9], -3.0);
 
-        let spotify = restored.apps.get("com.spotify.client").expect("spotify config");
+        let spotify = restored
+            .apps
+            .get("com.spotify.client")
+            .expect("spotify config");
         assert_eq!(spotify.volume, 0.75);
         assert!(spotify.boost_enabled);
         assert_eq!(spotify.eq_gains[3], 2.0);

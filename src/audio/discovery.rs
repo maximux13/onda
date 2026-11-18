@@ -4,27 +4,30 @@ use std::mem::size_of;
 use std::ptr::{self, NonNull};
 use std::sync::{Mutex, OnceLock};
 
+use objc2::AnyThread;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::AnyThread;
 use objc2_app_kit::{
-    NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey, NSCalibratedRGBColorSpace,
-    NSCompositingOperation, NSGraphicsContext, NSImage, NSRunningApplication,
+    NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey,
+    NSCalibratedRGBColorSpace, NSCompositingOperation, NSGraphicsContext, NSImage,
+    NSRunningApplication,
 };
 use objc2_core_audio::{
-    kAudioHardwarePropertyProcessObjectList, kAudioObjectPropertyElementMain,
-    kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject, kAudioProcessPropertyBundleID,
-    kAudioProcessPropertyIsRunningOutput, kAudioProcessPropertyPID, AudioObjectGetPropertyData,
-    AudioObjectGetPropertyDataSize, AudioObjectID, AudioObjectPropertyAddress,
+    AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize, AudioObjectID,
+    AudioObjectPropertyAddress, kAudioHardwarePropertyProcessObjectList,
+    kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject,
+    kAudioProcessPropertyBundleID, kAudioProcessPropertyIsRunningOutput, kAudioProcessPropertyPID,
 };
 use objc2_core_foundation::{CFRetained, CFString};
 use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize};
 
 use crate::state::AudioAppInfo;
 
-static ICON_CACHE: OnceLock<Mutex<HashMap<String, (Vec<u8>, u32)>>> = OnceLock::new();
+type IconCacheMap = HashMap<String, (Vec<u8>, u32)>;
 
-fn icon_cache() -> &'static Mutex<HashMap<String, (Vec<u8>, u32)>> {
+static ICON_CACHE: OnceLock<Mutex<IconCacheMap>> = OnceLock::new();
+
+fn icon_cache() -> &'static Mutex<IconCacheMap> {
     ICON_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -93,11 +96,7 @@ fn get_property_u32(object_id: AudioObjectID, selector: u32) -> Option<u32> {
             NonNull::from(&mut value).cast::<c_void>(),
         )
     };
-    if status == 0 {
-        Some(value)
-    } else {
-        None
-    }
+    if status == 0 { Some(value) } else { None }
 }
 
 fn get_property_i32(object_id: AudioObjectID, selector: u32) -> Option<i32> {
@@ -118,11 +117,7 @@ fn get_property_i32(object_id: AudioObjectID, selector: u32) -> Option<i32> {
             NonNull::from(&mut value).cast::<c_void>(),
         )
     };
-    if status == 0 {
-        Some(value)
-    } else {
-        None
-    }
+    if status == 0 { Some(value) } else { None }
 }
 
 fn get_property_cfstring(object_id: AudioObjectID, selector: u32) -> Option<String> {
@@ -164,7 +159,10 @@ fn known_app_color(bundle_id: &str, name: &str) -> Option<u32> {
         Some(0xff5500)
     } else if bid.contains("chrome") || nm.contains("chrome") {
         Some(0x2b8eff)
-    } else if bid.contains("vscode") || bid.contains("microsoft.vscode") || nm.contains("visual studio code") {
+    } else if bid.contains("vscode")
+        || bid.contains("microsoft.vscode")
+        || nm.contains("visual studio code")
+    {
         Some(0x0098ff)
     } else if bid.contains("com.apple.finder") || nm == "finder" {
         Some(0xa8b3c8)
@@ -505,9 +503,21 @@ mod tests {
 
     #[test]
     fn test_known_app_dominant_colors() {
-        assert_eq!(known_app_color("com.spotify.client", "Spotify"), Some(0x1ed760));
-        assert_eq!(known_app_color("com.brave.Browser", "Brave Browser"), Some(0xff5500));
-        assert_eq!(known_app_color("com.google.Chrome", "Google Chrome"), Some(0x2b8eff));
-        assert_eq!(known_app_color("com.hnc.Discord", "Discord"), Some(0x5865f2));
+        assert_eq!(
+            known_app_color("com.spotify.client", "Spotify"),
+            Some(0x1ed760)
+        );
+        assert_eq!(
+            known_app_color("com.brave.Browser", "Brave Browser"),
+            Some(0xff5500)
+        );
+        assert_eq!(
+            known_app_color("com.google.Chrome", "Google Chrome"),
+            Some(0x2b8eff)
+        );
+        assert_eq!(
+            known_app_color("com.hnc.Discord", "Discord"),
+            Some(0x5865f2)
+        );
     }
 }

@@ -4,21 +4,24 @@ use gpui::prelude::*;
 use gpui::{AssetSource, Hsla, Result, SharedString, Svg, px, svg};
 
 /// Official Lucide icon asset paths registered with [`LucideAssets`].
-#[allow(non_snake_case)]
+#[expect(
+    non_snake_case,
+    reason = "PascalCase module name acts as an icon namespace"
+)]
 pub mod IconName {
-    pub const AUDIO_LINES: &'static str = "icons/audio-lines.svg";
-    pub const VOLUME_2: &'static str = "icons/volume-2.svg";
-    pub const VOLUME_X: &'static str = "icons/volume-x.svg";
-    pub const SETTINGS: &'static str = "icons/settings.svg";
-    pub const PIN: &'static str = "icons/pin.svg";
-    pub const HEADPHONES: &'static str = "icons/headphones.svg";
-    pub const SPARKLES: &'static str = "icons/sparkles.svg";
-    pub const CHEVRON_DOWN: &'static str = "icons/chevron-down.svg";
-    pub const KEYBOARD: &'static str = "icons/keyboard.svg";
-    pub const BELL: &'static str = "icons/bell.svg";
-    pub const INFO: &'static str = "icons/info.svg";
-    pub const SUN: &'static str = "icons/sun.svg";
-    pub const ARROW_LEFT: &'static str = "icons/arrow-left.svg";
+    pub const AUDIO_LINES: &str = "icons/audio-lines.svg";
+    pub const VOLUME_2: &str = "icons/volume-2.svg";
+    pub const VOLUME_X: &str = "icons/volume-x.svg";
+    pub const SETTINGS: &str = "icons/settings.svg";
+    pub const PIN: &str = "icons/pin.svg";
+    pub const HEADPHONES: &str = "icons/headphones.svg";
+    pub const SPARKLES: &str = "icons/sparkles.svg";
+    pub const CHEVRON_DOWN: &str = "icons/chevron-down.svg";
+    pub const KEYBOARD: &str = "icons/keyboard.svg";
+    pub const BELL: &str = "icons/bell.svg";
+    pub const INFO: &str = "icons/info.svg";
+    pub const SUN: &str = "icons/sun.svg";
+    pub const ARROW_LEFT: &str = "icons/arrow-left.svg";
 }
 
 /// Embedded [`AssetSource`] providing official Lucide `.svg` vector icons.

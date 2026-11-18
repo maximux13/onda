@@ -2,12 +2,12 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui::prelude::*;
-use gpui::{
-    App, Bounds, ElementId, MouseButton, Pixels, Window, div, px, relative, rgb, rgba,
-};
+use gpui::{App, Bounds, ElementId, MouseButton, Pixels, Window, div, px, relative, rgb, rgba};
 
 use crate::state::{ThemeMode, WindowStyle};
 use crate::ui::ThemePalette;
+
+type SliderCallback = Rc<dyn Fn(f32, &mut Window, &mut App)>;
 
 /// Glassmorphic horizontal volume slider component for GPUI with per-app dominant accent color
 /// and an always-visible circular white thumb matching the AudioMixer mockup.
@@ -19,7 +19,7 @@ pub struct VolumeSlider {
     muted: bool,
     accent_color: u32,
     theme: ThemeMode,
-    on_change: Rc<dyn Fn(f32, &mut Window, &mut App)>,
+    on_change: SliderCallback,
 }
 
 impl VolumeSlider {
@@ -154,12 +154,10 @@ impl RenderOnce for VolumeSlider {
                 }
             })
             .on_mouse_move(move |event, window, cx| {
-                if event.dragging() {
-                    if let Some(val) =
-                        Self::value_from_x(event.position.x, bounds_move.get(), max)
-                    {
-                        (on_change_move)(val, window, cx);
-                    }
+                if event.dragging()
+                    && let Some(val) = Self::value_from_x(event.position.x, bounds_move.get(), max)
+                {
+                    (on_change_move)(val, window, cx);
                 }
             })
             .child(track)
@@ -173,7 +171,7 @@ pub struct EqVerticalSlider {
     gain_db: f32,
     enabled: bool,
     theme: ThemeMode,
-    on_change: Rc<dyn Fn(f32, &mut Window, &mut App)>,
+    on_change: SliderCallback,
 }
 
 impl EqVerticalSlider {
@@ -292,10 +290,10 @@ impl RenderOnce for EqVerticalSlider {
                 }
             })
             .on_mouse_move(move |event, window, cx| {
-                if event.dragging() {
-                    if let Some(db) = Self::gain_from_y(event.position.y, bounds_move.get()) {
-                        (on_change_move)(db, window, cx);
-                    }
+                if event.dragging()
+                    && let Some(db) = Self::gain_from_y(event.position.y, bounds_move.get())
+                {
+                    (on_change_move)(db, window, cx);
                 }
             })
             .child(track)

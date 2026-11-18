@@ -33,8 +33,8 @@ pub fn set_launch_at_login(enabled: bool) -> Result<(), String> {
         return Ok(());
     }
 
-    let exe_path = std::env::current_exe()
-        .map_err(|e| format!("Failed to determine executable path: {e}"))?;
+    let exe_path =
+        std::env::current_exe().map_err(|e| format!("Failed to determine executable path: {e}"))?;
     let exe_str = exe_path.to_string_lossy();
 
     if let Some(parent) = plist_path.parent() {

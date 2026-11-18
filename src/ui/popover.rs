@@ -93,13 +93,12 @@ impl TrayPopoverView {
 
     fn sync_icon_cache(&mut self) {
         for app in &self.snapshot.apps {
-            if !self.icon_cache.contains_key(&app.info.bundle_id) {
-                if let Some(bytes) = &app.info.icon_png {
-                    if !bytes.is_empty() {
-                        let image = Arc::new(Image::from_bytes(ImageFormat::Png, bytes.clone()));
-                        self.icon_cache.insert(app.info.bundle_id.clone(), image);
-                    }
-                }
+            if !self.icon_cache.contains_key(&app.info.bundle_id)
+                && let Some(bytes) = &app.info.icon_png
+                && !bytes.is_empty()
+            {
+                let image = Arc::new(Image::from_bytes(ImageFormat::Png, bytes.clone()));
+                self.icon_cache.insert(app.info.bundle_id.clone(), image);
             }
         }
     }
@@ -291,20 +290,19 @@ impl TrayPopoverView {
     }
 
     fn active_eq_state(&self) -> (String, bool, [f32; 10], bool) {
-        if let Some(ref bundle_id) = self.snapshot.selected_eq_app {
-            if let Some(row) = self
+        if let Some(ref bundle_id) = self.snapshot.selected_eq_app
+            && let Some(row) = self
                 .snapshot
                 .apps
                 .iter()
                 .find(|r| &r.info.bundle_id == bundle_id)
-            {
-                return (
-                    row.info.name.clone(),
-                    row.config.eq_enabled,
-                    row.config.eq_gains,
-                    true,
-                );
-            }
+        {
+            return (
+                row.info.name.clone(),
+                row.config.eq_enabled,
+                row.config.eq_gains,
+                true,
+            );
         }
         (
             String::from("Global"),
@@ -691,11 +689,7 @@ impl TrayPopoverView {
                             .flex()
                             .items_center()
                             .gap(px(8.0))
-                            .child(lucide_svg(
-                                IconName::HEADPHONES,
-                                13.0,
-                                palette.text_primary,
-                            ))
+                            .child(lucide_svg(IconName::HEADPHONES, 13.0, palette.text_primary))
                             .child(
                                 div()
                                     .text_xs()
@@ -752,11 +746,7 @@ impl TrayPopoverView {
                             .items_center()
                             .gap(px(8.0))
                             .min_w_0()
-                            .child(lucide_svg(
-                                IconName::HEADPHONES,
-                                13.0,
-                                palette.text_primary,
-                            ))
+                            .child(lucide_svg(IconName::HEADPHONES, 13.0, palette.text_primary))
                             .child(
                                 div()
                                     .truncate()
@@ -803,15 +793,14 @@ impl TrayPopoverView {
         };
         let theme = self.snapshot.theme;
 
-        let entity_slider = cx.entity().clone();
+        let entity_slider = cx.entity();
         let bundle_for_slider = bundle_id.clone();
         let bundle_for_mute = bundle_id.clone();
         let bundle_for_boost = bundle_id.clone();
         let bundle_for_select = bundle_id.clone();
         let bundle_for_route = bundle_id.clone();
 
-        let is_eq_selected =
-            self.snapshot.selected_eq_app.as_deref() == Some(bundle_id.as_str());
+        let is_eq_selected = self.snapshot.selected_eq_app.as_deref() == Some(bundle_id.as_str());
         let is_expanded = self.expanded_routing_app.as_deref() == Some(bundle_id.as_str());
 
         let (speaker_icon, speaker_color) = if row.config.muted {
@@ -876,9 +865,7 @@ impl TrayPopoverView {
             left_group = left_group.child(self.render_vu_meter(row, palette));
         }
 
-        left_group = left_group
-            .child(self.render_app_icon(row))
-            .child(name_col);
+        left_group = left_group.child(self.render_app_icon(row)).child(name_col);
 
         let mut container = div()
             .w_full()
@@ -915,21 +902,19 @@ impl TrayPopoverView {
                     // Left: App Icon + Name (and VU meter + routing in advanced mode)
                     .child(left_group)
                     // Middle: Dominant-color VolumeSlider
-                    .child(
-                        div().flex_1().min_w(px(96.0)).child(VolumeSlider::new(
-                            SharedString::from(format!("app-slider-{bundle_id}")),
-                            row.config.volume,
-                            max_vol,
-                            row.config.muted,
-                            row.info.dominant_color,
-                            theme,
-                            move |val, _window, cx| {
-                                entity_slider.update(cx, |this, cx| {
-                                    this.set_app_volume(&bundle_for_slider, val, cx);
-                                });
-                            },
-                        )),
-                    )
+                    .child(div().flex_1().min_w(px(96.0)).child(VolumeSlider::new(
+                        SharedString::from(format!("app-slider-{bundle_id}")),
+                        row.config.volume,
+                        max_vol,
+                        row.config.muted,
+                        row.info.dominant_color,
+                        theme,
+                        move |val, _window, cx| {
+                            entity_slider.update(cx, |this, cx| {
+                                this.set_app_volume(&bundle_for_slider, val, cx);
+                            });
+                        },
+                    )))
                     // Right: Frosted percentage pill + speaker mute button
                     .child(
                         div()
@@ -1006,7 +991,7 @@ impl TrayPopoverView {
 
         for (idx, label) in EQ_LABELS.iter().copied().enumerate() {
             let gain = eq_gains[idx];
-            let entity = cx.entity().clone();
+            let entity = cx.entity();
 
             sliders_row = sliders_row.child(
                 div()
@@ -1190,7 +1175,7 @@ impl TrayPopoverView {
             (volume * 100.0).round() as i32
         };
         let theme = self.snapshot.theme;
-        let entity_slider = cx.entity().clone();
+        let entity_slider = cx.entity();
 
         let (speaker_icon, speaker_color) = if muted {
             (IconName::VOLUME_X, palette.mute_red)
@@ -1258,21 +1243,19 @@ impl TrayPopoverView {
                             .child(device.name.clone()),
                     ),
             )
-            .child(
-                div().flex_1().min_w(px(90.0)).child(VolumeSlider::new(
-                    SharedString::from(format!("dev-slider-{dev_id}")),
-                    volume,
-                    1.0,
-                    muted,
-                    0x2582ff,
-                    theme,
-                    move |val, _window, cx| {
-                        entity_slider.update(cx, |this, cx| {
-                            this.set_device_volume(dev_id, val, cx);
-                        });
-                    },
-                )),
-            )
+            .child(div().flex_1().min_w(px(90.0)).child(VolumeSlider::new(
+                SharedString::from(format!("dev-slider-{dev_id}")),
+                volume,
+                1.0,
+                muted,
+                0x2582ff,
+                theme,
+                move |val, _window, cx| {
+                    entity_slider.update(cx, |this, cx| {
+                        this.set_device_volume(dev_id, val, cx);
+                    });
+                },
+            )))
             .child(
                 div()
                     .flex_shrink_0()
@@ -1374,11 +1357,7 @@ impl TrayPopoverView {
                             .items_center()
                             .gap(px(8.0))
                             .min_w_0()
-                            .child(lucide_svg(
-                                IconName::HEADPHONES,
-                                15.0,
-                                palette.text_primary,
-                            ))
+                            .child(lucide_svg(IconName::HEADPHONES, 15.0, palette.text_primary))
                             .child(
                                 div()
                                     .truncate()
@@ -1444,11 +1423,7 @@ impl TrayPopoverView {
     }
 
     /// Renders View 1: Main `Onda` view.
-    fn render_mixer_view(
-        &self,
-        palette: ThemePalette,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render_mixer_view(&self, palette: ThemePalette, cx: &mut Context<Self>) -> impl IntoElement {
         let mut apps_list = div().w_full().flex().flex_col().gap(px(2.0));
 
         if self.snapshot.apps.is_empty() {
@@ -1959,11 +1934,7 @@ impl TrayPopoverView {
                                     .items_center()
                                     .justify_center()
                                     .flex_shrink_0()
-                                    .child(lucide_svg(
-                                        IconName::INFO,
-                                        15.0,
-                                        palette.text_primary,
-                                    )),
+                                    .child(lucide_svg(IconName::INFO, 15.0, palette.text_primary)),
                             )
                             .child(
                                 div()
@@ -2299,9 +2270,7 @@ impl TrayPopoverView {
             SettingsTab::Shortcuts => self
                 .render_settings_shortcuts_tab(palette)
                 .into_any_element(),
-            SettingsTab::Equalizer => self
-                .render_settings_eq_tab(palette, cx)
-                .into_any_element(),
+            SettingsTab::Equalizer => self.render_settings_eq_tab(palette, cx).into_any_element(),
             SettingsTab::Notifications => self
                 .render_settings_notifications_tab(palette)
                 .into_any_element(),
@@ -2470,8 +2439,7 @@ impl TrayPopoverView {
 
 impl Render for TrayPopoverView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette =
-            ThemePalette::for_theme(self.snapshot.theme, self.snapshot.window_style);
+        let palette = ThemePalette::for_theme(self.snapshot.theme, self.snapshot.window_style);
 
         let content: AnyElement = if self.show_settings {
             self.render_settings_view(palette, cx).into_any_element()

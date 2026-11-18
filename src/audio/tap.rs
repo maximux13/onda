@@ -1,19 +1,19 @@
 use std::f32::consts::PI;
 use std::ffi::c_void;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use objc2::AnyThread;
 use objc2_core_audio::{
-    kAudioAggregateDeviceIsPrivateKey, kAudioAggregateDeviceMainSubDeviceKey,
+    AudioDeviceCreateIOProcID, AudioDeviceDestroyIOProcID, AudioDeviceIOProcID, AudioDeviceStart,
+    AudioDeviceStop, AudioHardwareCreateAggregateDevice, AudioHardwareCreateProcessTap,
+    AudioHardwareDestroyAggregateDevice, AudioHardwareDestroyProcessTap, CATapDescription,
+    CATapMuteBehavior, kAudioAggregateDeviceIsPrivateKey, kAudioAggregateDeviceMainSubDeviceKey,
     kAudioAggregateDeviceNameKey, kAudioAggregateDeviceSubDeviceListKey,
     kAudioAggregateDeviceTapAutoStartKey, kAudioAggregateDeviceTapListKey,
     kAudioAggregateDeviceUIDKey, kAudioSubDeviceUIDKey, kAudioSubTapDriftCompensationKey,
-    kAudioSubTapUIDKey, AudioDeviceCreateIOProcID, AudioDeviceDestroyIOProcID, AudioDeviceIOProcID,
-    AudioDeviceStart, AudioDeviceStop, AudioHardwareCreateAggregateDevice,
-    AudioHardwareCreateProcessTap, AudioHardwareDestroyAggregateDevice,
-    AudioHardwareDestroyProcessTap, CATapDescription, CATapMuteBehavior,
+    kAudioSubTapUIDKey,
 };
 use objc2_core_audio_types::{AudioBufferList, AudioTimeStamp};
 use objc2_core_foundation::{CFArray, CFBoolean, CFDictionary, CFString, CFType};
@@ -119,7 +119,11 @@ pub struct AppTapHandle {
     ctx_ptr: *mut TapContext,
 }
 
+// SAFETY: All shared fields in `AppTapHandle` are `Arc<Atomic*>` or owned `String`/IDs;
+// `ctx_ptr` is only dereferenced by the Core Audio IOProc while active and freed in `Drop`
+// after stopping and destroying the IOProc.
 unsafe impl Send for AppTapHandle {}
+// SAFETY: `AppTapHandle` methods only perform atomic operations or read immutable fields.
 unsafe impl Sync for AppTapHandle {}
 
 impl AppTapHandle {
@@ -152,6 +156,8 @@ impl AppTapHandle {
 
 impl Drop for AppTapHandle {
     fn drop(&mut self) {
+        // SAFETY: Stopping and destroying the IOProc before freeing `ctx_ptr` ensures
+        // Core Audio will not invoke `tap_io_proc` with a dangling `TapContext` pointer.
         unsafe {
             let _ = AudioDeviceStop(self.aggregate_device_id, self.io_proc_id);
             let _ = AudioDeviceDestroyIOProcID(self.aggregate_device_id, self.io_proc_id);
@@ -181,6 +187,8 @@ unsafe extern "C-unwind" fn tap_io_proc(
         return 0;
     }
 
+    // SAFETY: `in_client_data` was created via `Box::into_raw(Box::new(TapContext { ... }))`
+    // and remains valid until `AppTapHandle::drop` after the IOProc is destroyed.
     let ctx = unsafe { &mut *(in_client_data as *mut TapContext) };
     let scale = if ctx.muted.load(Ordering::Relaxed) {
         0.0f32
@@ -202,6 +210,8 @@ unsafe extern "C-unwind" fn tap_io_proc(
         }
     }
 
+    // SAFETY: Core Audio passes valid `NonNull<AudioBufferList>` pointers for the duration
+    // of the IOProc callback, and `mNumberBuffers` matches the trailing `mBuffers` array.
     let in_list = unsafe { in_input_data.as_ref() };
     let out_list = unsafe { out_output_data.as_mut() };
 
@@ -221,55 +231,60 @@ unsafe extern "C-unwind" fn tap_io_proc(
 
         let n_channels = (out_buf.mNumberChannels as usize).max(1);
         let out_samples_len = (out_buf.mDataByteSize as usize) / std::mem::size_of::<f32>();
+        // SAFETY: `out_buf.mData` is non-null and `mDataByteSize` is its valid byte length.
         let out_samples =
             unsafe { std::slice::from_raw_parts_mut(out_buf.mData as *mut f32, out_samples_len) };
 
-        if let Some(in_buf) = in_buffers.get(i) {
-            if !in_buf.mData.is_null() && in_buf.mDataByteSize > 0 {
-                let in_samples_len = (in_buf.mDataByteSize as usize) / std::mem::size_of::<f32>();
-                let count = out_samples_len.min(in_samples_len);
-                let in_samples =
-                    unsafe { std::slice::from_raw_parts(in_buf.mData as *const f32, count) };
+        if let Some(in_buf) = in_buffers.get(i)
+            && !in_buf.mData.is_null()
+            && in_buf.mDataByteSize > 0
+        {
+            let in_samples_len = (in_buf.mDataByteSize as usize) / std::mem::size_of::<f32>();
+            let count = out_samples_len.min(in_samples_len);
+            // SAFETY: `in_buf.mData` is non-null and has at least `count` `f32` samples.
+            let in_samples =
+                unsafe { std::slice::from_raw_parts(in_buf.mData as *const f32, count) };
 
-                if scale == 0.0 {
-                    out_samples[..count].fill(0.0);
-                } else if !use_eq {
-                    for (dst, &src) in out_samples[..count].iter_mut().zip(in_samples.iter()) {
-                        let s = src * scale;
-                        if s.abs() > max_abs {
-                            max_abs = s.abs();
-                        }
-                        *dst = s;
+            if scale == 0.0 {
+                out_samples[..count].fill(0.0);
+            } else if !use_eq {
+                for (dst, &src) in out_samples[..count].iter_mut().zip(in_samples.iter()) {
+                    let s = src * scale;
+                    if s.abs() > max_abs {
+                        max_abs = s.abs();
                     }
-                } else {
-                    for (idx, (dst, &src)) in
-                        out_samples[..count].iter_mut().zip(in_samples.iter()).enumerate()
-                    {
-                        let ch = if n_channels == 1 {
-                            i.min(1)
-                        } else {
-                            (idx % n_channels).min(1)
-                        };
-                        let mut s = src * scale;
-                        for band in &mut ctx.bands {
-                            if band.active {
-                                s = band.process(s, ch);
-                            }
+                    *dst = s;
+                }
+            } else {
+                for (idx, (dst, &src)) in out_samples[..count]
+                    .iter_mut()
+                    .zip(in_samples.iter())
+                    .enumerate()
+                {
+                    let ch = if n_channels == 1 {
+                        i.min(1)
+                    } else {
+                        (idx % n_channels).min(1)
+                    };
+                    let mut s = src * scale;
+                    for band in &mut ctx.bands {
+                        if band.active {
+                            s = band.process(s, ch);
                         }
-                        if !s.is_finite() {
-                            s = 0.0;
-                        }
-                        if s.abs() > max_abs {
-                            max_abs = s.abs();
-                        }
-                        *dst = s;
                     }
+                    if !s.is_finite() {
+                        s = 0.0;
+                    }
+                    if s.abs() > max_abs {
+                        max_abs = s.abs();
+                    }
+                    *dst = s;
                 }
-                if count < out_samples_len {
-                    out_samples[count..].fill(0.0);
-                }
-                continue;
             }
+            if count < out_samples_len {
+                out_samples[count..].fill(0.0);
+            }
+            continue;
         }
 
         out_samples.fill(0.0);

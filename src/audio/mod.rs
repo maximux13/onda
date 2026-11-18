@@ -44,10 +44,10 @@ impl AudioEngine {
     }
 
     fn resolve_target_uid(&self, config: &AppVolumeConfig) -> Option<String> {
-        if let Some(ref target_uid) = config.target_device_uid {
-            if self.last_device_uids.contains(target_uid) {
-                return Some(target_uid.clone());
-            }
+        if let Some(ref target_uid) = config.target_device_uid
+            && self.last_device_uids.contains(target_uid)
+        {
+            return Some(target_uid.clone());
         }
         self.last_output_uid.clone()
     }
@@ -233,59 +233,51 @@ impl AudioEngine {
         let _ = master::set_device_mute(device_id, muted);
     }
 
+    fn update_app_config(&mut self, bundle_id: &str, update: impl FnOnce(&mut AppVolumeConfig)) {
+        let config = self.configs.entry(bundle_id.to_string()).or_default();
+        update(config);
+        let updated = config.clone();
+
+        self.prefs
+            .apps
+            .insert(bundle_id.to_string(), updated.clone());
+        self.prefs.save();
+        self.ensure_tap(bundle_id, &updated);
+    }
+
     pub fn set_default_output_device(&mut self, device_id: u32) {
         let _ = master::set_default_output_device(device_id);
     }
 
     pub fn set_app_volume(&mut self, bundle_id: &str, volume: f32) {
         let max_limit = self.prefs.max_volume_limit.clamp(1.0, 2.0);
-        let config = self.configs.entry(bundle_id.to_string()).or_default();
-        config.volume = volume.clamp(0.0, max_limit);
-        if config.volume > 1.0 {
-            config.boost_enabled = true;
-        }
-        let updated = config.clone();
-
-        self.prefs.apps.insert(bundle_id.to_string(), updated.clone());
-        self.prefs.save();
-
-        self.ensure_tap(bundle_id, &updated);
+        self.update_app_config(bundle_id, |config| {
+            config.volume = volume.clamp(0.0, max_limit);
+            if config.volume > 1.0 {
+                config.boost_enabled = true;
+            }
+        });
     }
 
     pub fn set_app_mute(&mut self, bundle_id: &str, muted: bool) {
-        let config = self.configs.entry(bundle_id.to_string()).or_default();
-        config.muted = muted;
-        let updated = config.clone();
-
-        self.prefs.apps.insert(bundle_id.to_string(), updated.clone());
-        self.prefs.save();
-
-        self.ensure_tap(bundle_id, &updated);
+        self.update_app_config(bundle_id, |config| {
+            config.muted = muted;
+        });
     }
 
     pub fn set_app_boost(&mut self, bundle_id: &str, boost_enabled: bool) {
-        let config = self.configs.entry(bundle_id.to_string()).or_default();
-        config.boost_enabled = boost_enabled;
-        if !boost_enabled && config.volume > 1.0 {
-            config.volume = 1.0;
-        }
-        let updated = config.clone();
-
-        self.prefs.apps.insert(bundle_id.to_string(), updated.clone());
-        self.prefs.save();
-
-        self.ensure_tap(bundle_id, &updated);
+        self.update_app_config(bundle_id, |config| {
+            config.boost_enabled = boost_enabled;
+            if !boost_enabled && config.volume > 1.0 {
+                config.volume = 1.0;
+            }
+        });
     }
 
     pub fn set_app_target_device(&mut self, bundle_id: &str, target_device_uid: Option<String>) {
-        let config = self.configs.entry(bundle_id.to_string()).or_default();
-        config.target_device_uid = target_device_uid;
-        let updated = config.clone();
-
-        self.prefs.apps.insert(bundle_id.to_string(), updated.clone());
-        self.prefs.save();
-
-        self.ensure_tap(bundle_id, &updated);
+        self.update_app_config(bundle_id, |config| {
+            config.target_device_uid = target_device_uid;
+        });
     }
 
     pub fn select_eq_app(&mut self, bundle_id: Option<String>) {
@@ -294,12 +286,9 @@ impl AudioEngine {
 
     pub fn set_active_eq_enabled(&mut self, enabled: bool) {
         if let Some(bundle_id) = self.selected_eq_app.clone() {
-            let config = self.configs.entry(bundle_id.clone()).or_default();
-            config.eq_enabled = enabled;
-            let updated = config.clone();
-            self.prefs.apps.insert(bundle_id.clone(), updated.clone());
-            self.prefs.save();
-            self.ensure_tap(&bundle_id, &updated);
+            self.update_app_config(&bundle_id, |config| {
+                config.eq_enabled = enabled;
+            });
         } else {
             self.prefs.global_eq_enabled = enabled;
             self.prefs.save();
@@ -313,12 +302,9 @@ impl AudioEngine {
         }
         let clamped = gain_db.clamp(-12.0, 12.0);
         if let Some(bundle_id) = self.selected_eq_app.clone() {
-            let config = self.configs.entry(bundle_id.clone()).or_default();
-            config.eq_gains[band_idx] = clamped;
-            let updated = config.clone();
-            self.prefs.apps.insert(bundle_id.clone(), updated.clone());
-            self.prefs.save();
-            self.ensure_tap(&bundle_id, &updated);
+            self.update_app_config(&bundle_id, |config| {
+                config.eq_gains[band_idx] = clamped;
+            });
         } else {
             self.prefs.global_eq_gains[band_idx] = clamped;
             self.prefs.save();
@@ -328,12 +314,9 @@ impl AudioEngine {
 
     pub fn reset_active_eq(&mut self) {
         if let Some(bundle_id) = self.selected_eq_app.clone() {
-            let config = self.configs.entry(bundle_id.clone()).or_default();
-            config.eq_gains = [0.0; 10];
-            let updated = config.clone();
-            self.prefs.apps.insert(bundle_id.clone(), updated.clone());
-            self.prefs.save();
-            self.ensure_tap(&bundle_id, &updated);
+            self.update_app_config(&bundle_id, |config| {
+                config.eq_gains = [0.0; 10];
+            });
         } else {
             self.prefs.global_eq_gains = [0.0; 10];
             self.prefs.save();
