@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::fs;
 use std::path::PathBuf;
 
@@ -44,6 +42,7 @@ impl JsonFileStore {
     }
 
     /// Creates a store targeting an explicit file path (useful for testing).
+    #[cfg(test)]
     pub fn with_path(path: PathBuf) -> Self {
         Self { path: Some(path) }
     }
