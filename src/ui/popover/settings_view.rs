@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use gpui::prelude::*;
 use gpui::{AnyElement, Context, FontWeight, SharedString, div, px, rgb, rgba};
 
@@ -5,6 +7,7 @@ use crate::state::{ThemeMode, WindowStyle};
 use crate::ui::ThemePalette;
 use crate::ui::icons::{IconName, lucide_svg};
 use crate::ui::slider::VolumeSlider;
+use crate::updater::{UpdateController, UpdateState, relaunch_app};
 
 use super::{SettingsTab, TrayPopoverView};
 
@@ -898,7 +901,114 @@ impl TrayPopoverView {
             )
     }
 
-    fn render_settings_about_tab(&self, palette: ThemePalette) -> impl IntoElement {
+    fn render_settings_about_tab(
+        &self,
+        palette: ThemePalette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let update_state = self.update_state();
+        let status_text = match &update_state {
+            UpdateState::Idle | UpdateState::UpToDate => {
+                "You're on the latest version.".to_string()
+            }
+            UpdateState::Checking => "Checking for updates...".to_string(),
+            UpdateState::Available(info) => format!("Version v{} is available.", info.version),
+            UpdateState::Downloading { version } => format!("Downloading v{version}..."),
+            UpdateState::ReadyToRestart { version, .. } => {
+                format!("v{version} is ready. Restart to finish updating.")
+            }
+            UpdateState::Error(err) => err.clone(),
+        };
+
+        let action_btn: Option<AnyElement> = match update_state {
+            UpdateState::Idle | UpdateState::UpToDate | UpdateState::Error(_) => Some(
+                div()
+                    .id("about-check-updates-btn")
+                    .px(px(10.0))
+                    .py(px(5.0))
+                    .rounded(px(8.0))
+                    .bg(palette.pill_bg)
+                    .border_1()
+                    .border_color(palette.card_border)
+                    .hover(move |s| s.bg(palette.pill_hover_bg))
+                    .cursor_pointer()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(palette.text_primary)
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.update_banner_dismissed = false;
+                        UpdateController::trigger_check(Arc::clone(&this.updater));
+                        cx.notify();
+                    }))
+                    .child("Check for Updates")
+                    .into_any_element(),
+            ),
+            UpdateState::Available(_) => Some(
+                div()
+                    .id("about-download-update-btn")
+                    .px(px(10.0))
+                    .py(px(5.0))
+                    .rounded(px(8.0))
+                    .bg(palette.accent_blue)
+                    .cursor_pointer()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(0xffffff))
+                    .on_click(cx.listener(|this, _event, _window, _cx| {
+                        UpdateController::trigger_download(Arc::clone(&this.updater));
+                    }))
+                    .child("Download Update")
+                    .into_any_element(),
+            ),
+            UpdateState::ReadyToRestart { app_path, .. } => Some(
+                div()
+                    .id("about-restart-update-btn")
+                    .px(px(10.0))
+                    .py(px(5.0))
+                    .rounded(px(8.0))
+                    .bg(palette.accent_blue)
+                    .cursor_pointer()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(0xffffff))
+                    .on_click(cx.listener(move |_this, _event, _window, cx| {
+                        let _ = relaunch_app(&app_path);
+                        cx.quit();
+                    }))
+                    .child("Restart & Update")
+                    .into_any_element(),
+            ),
+            UpdateState::Checking | UpdateState::Downloading { .. } => None,
+        };
+
+        let mut updates_card = div()
+            .w_full()
+            .p(px(12.0))
+            .rounded(px(12.0))
+            .bg(palette.card_bg)
+            .border_1()
+            .border_color(palette.card_border)
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(palette.text_primary)
+                    .child("Updates"),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(palette.text_secondary)
+                    .child(status_text),
+            );
+
+        if let Some(btn) = action_btn {
+            updates_card = updates_card.child(div().flex().items_center().child(btn));
+        }
+
         div()
             .w_full()
             .flex()
@@ -927,7 +1037,7 @@ impl TrayPopoverView {
                             .text_sm()
                             .font_weight(FontWeight::BOLD)
                             .text_color(palette.text_primary)
-                            .child("Onda v0.1.0"),
+                            .child(format!("Onda v{}", env!("CARGO_PKG_VERSION"))),
                     )
                     .child(
                         div()
@@ -936,6 +1046,7 @@ impl TrayPopoverView {
                             .child("Per-application volume control, output device routing, and real-time 10-band parametric equalizer powered by Core Audio Process Taps and GPUI."),
                     ),
             )
+            .child(updates_card)
     }
 
     /// Renders View 2: 2-Column `Settings` view matching the right panel of the mockup.
@@ -955,7 +1066,9 @@ impl TrayPopoverView {
             SettingsTab::Notifications => self
                 .render_settings_notifications_tab(palette)
                 .into_any_element(),
-            SettingsTab::About => self.render_settings_about_tab(palette).into_any_element(),
+            SettingsTab::About => self
+                .render_settings_about_tab(palette, cx)
+                .into_any_element(),
         };
 
         div()

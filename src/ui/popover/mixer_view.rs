@@ -3,6 +3,7 @@ use gpui::{Context, FontWeight, div, px, rgb};
 
 use crate::ui::ThemePalette;
 use crate::ui::icons::{IconName, lucide_svg};
+use crate::updater::UpdateState;
 
 use super::TrayPopoverView;
 
@@ -43,6 +44,7 @@ impl TrayPopoverView {
                     .child(
                         div()
                             .id("mixer-open-settings-btn")
+                            .relative()
                             .size(px(32.0))
                             .rounded_full()
                             .bg(palette.pill_bg)
@@ -62,7 +64,24 @@ impl TrayPopoverView {
                                     cx.notify();
                                 }
                             }))
-                            .child(lucide_svg(IconName::SETTINGS, 16.0, palette.text_primary)),
+                            .child(lucide_svg(IconName::SETTINGS, 16.0, palette.text_primary))
+                            .when(
+                                matches!(
+                                    self.update_state(),
+                                    UpdateState::Available(_) | UpdateState::ReadyToRestart { .. }
+                                ),
+                                |el| {
+                                    el.child(
+                                        div()
+                                            .absolute()
+                                            .top(px(5.0))
+                                            .right(px(5.0))
+                                            .size(px(6.0))
+                                            .rounded_full()
+                                            .bg(palette.accent_blue),
+                                    )
+                                },
+                            ),
                     )
                     .child(
                         div()

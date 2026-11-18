@@ -18,6 +18,7 @@ use crate::audio::AudioEngine;
 use crate::state::{MixerSnapshot, WindowStyle};
 use crate::ui::ThemePalette;
 use crate::ui::icons::lucide_svg;
+use crate::updater::{UpdateController, UpdateState, relaunch_app};
 
 /// Sidebar tab in the `Settings` view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,6 +33,8 @@ pub(super) enum SettingsTab {
 /// Glassmorphic macOS `Onda` & `Settings` popover view.
 pub struct TrayPopoverView {
     pub(super) engine: Arc<Mutex<AudioEngine>>,
+    pub(super) updater: Arc<Mutex<UpdateController>>,
+    pub(super) update_banner_dismissed: bool,
     pub(super) snapshot: MixerSnapshot,
     pub(super) icon_cache: HashMap<String, Arc<Image>>,
     pub(super) expanded_routing_app: Option<String>,
@@ -50,9 +53,15 @@ pub struct TrayPopoverView {
 impl TrayPopoverView {
     /// Creates a new [`TrayPopoverView`], loads the initial mixer snapshot,
     /// and starts a 150ms background timer so VU meters and app lists stay live.
-    pub fn new(engine: Arc<Mutex<AudioEngine>>, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        engine: Arc<Mutex<AudioEngine>>,
+        updater: Arc<Mutex<UpdateController>>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut view = Self {
             engine,
+            updater,
+            update_banner_dismissed: false,
             snapshot: MixerSnapshot::default(),
             icon_cache: HashMap::new(),
             expanded_routing_app: None,
@@ -87,6 +96,183 @@ impl TrayPopoverView {
     /// Returns whether the popover is pinned by the user (preventing auto-close on blur).
     pub fn is_pinned(&self) -> bool {
         self.is_pinned
+    }
+
+    /// Returns a snapshot of the current auto-updater state.
+    pub(super) fn update_state(&self) -> UpdateState {
+        self.updater.lock().map(|u| u.state()).unwrap_or_default()
+    }
+
+    /// Renders a compact top banner when an update is available, downloading, ready, or errored.
+    fn render_update_banner(
+        &self,
+        palette: ThemePalette,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let banner_shell = |border_color| {
+            div()
+                .w_full()
+                .px(px(10.0))
+                .py(px(7.0))
+                .rounded(px(10.0))
+                .bg(palette.card_bg)
+                .border_1()
+                .border_color(border_color)
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(8.0))
+        };
+
+        let dismiss_btn = |id: &'static str, cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .px(px(6.0))
+                .py(px(2.0))
+                .rounded(px(6.0))
+                .cursor_pointer()
+                .hover(move |s| s.bg(palette.pill_hover_bg))
+                .text_xs()
+                .font_weight(FontWeight::BOLD)
+                .text_color(palette.text_secondary)
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.update_banner_dismissed = true;
+                    cx.notify();
+                }))
+                .child("×")
+        };
+
+        match self.update_state() {
+            UpdateState::Available(info) if !self.update_banner_dismissed => Some(
+                banner_shell(palette.accent_blue)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(palette.text_primary)
+                            .child(format!("Nueva versión v{} disponible", info.version)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .flex_shrink_0()
+                            .child(
+                                div()
+                                    .id("update-banner-download-btn")
+                                    .px(px(8.0))
+                                    .py(px(3.0))
+                                    .rounded(px(6.0))
+                                    .bg(palette.accent_blue)
+                                    .cursor_pointer()
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgb(0xffffff))
+                                    .on_click(cx.listener(|this, _event, _window, _cx| {
+                                        UpdateController::trigger_download(Arc::clone(
+                                            &this.updater,
+                                        ));
+                                    }))
+                                    .child("Actualizar"),
+                            )
+                            .child(dismiss_btn("update-banner-dismiss-available", cx)),
+                    )
+                    .into_any_element(),
+            ),
+            UpdateState::Downloading { version } => Some(
+                banner_shell(palette.card_border)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(palette.text_secondary)
+                            .child(format!("Descargando Onda v{version}...")),
+                    )
+                    .into_any_element(),
+            ),
+            UpdateState::ReadyToRestart { version, app_path } => Some(
+                banner_shell(palette.accent_blue)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(palette.text_primary)
+                            .child(format!("Onda v{version} lista")),
+                    )
+                    .child(
+                        div()
+                            .id("update-banner-restart-btn")
+                            .flex_shrink_0()
+                            .px(px(8.0))
+                            .py(px(3.0))
+                            .rounded(px(6.0))
+                            .bg(palette.accent_blue)
+                            .cursor_pointer()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(0xffffff))
+                            .on_click(cx.listener(move |_this, _event, _window, cx| {
+                                let _ = relaunch_app(&app_path);
+                                cx.quit();
+                            }))
+                            .child("Reiniciar y actualizar"),
+                    )
+                    .into_any_element(),
+            ),
+            UpdateState::Error(msg) if !self.update_banner_dismissed => Some(
+                banner_shell(palette.mute_red)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .text_color(palette.text_secondary)
+                            .child(msg),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .flex_shrink_0()
+                            .child(
+                                div()
+                                    .id("update-banner-retry-btn")
+                                    .px(px(8.0))
+                                    .py(px(3.0))
+                                    .rounded(px(6.0))
+                                    .bg(palette.pill_bg)
+                                    .border_1()
+                                    .border_color(palette.card_border)
+                                    .hover(move |s| s.bg(palette.pill_hover_bg))
+                                    .cursor_pointer()
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(palette.text_primary)
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.update_banner_dismissed = false;
+                                        UpdateController::trigger_check(Arc::clone(&this.updater));
+                                        cx.notify();
+                                    }))
+                                    .child("Reintentar"),
+                            )
+                            .child(dismiss_btn("update-banner-dismiss-error", cx)),
+                    )
+                    .into_any_element(),
+            ),
+            _ => None,
+        }
     }
 
     /// Advances the view transition ID so GPUI replays the view-switch animation.
@@ -237,7 +423,7 @@ impl Render for TrayPopoverView {
             self.render_mixer_view(palette, cx).into_any_element()
         };
 
-        div()
+        let mut root = div()
             .w_full()
             .h_full()
             .flex()
@@ -247,7 +433,12 @@ impl Render for TrayPopoverView {
             .border_1()
             .border_color(palette.panel_border)
             .bg(palette.panel_bg)
-            .text_color(palette.text_primary)
-            .child(div().flex_1().min_h_0().w_full().h_full().child(content))
+            .text_color(palette.text_primary);
+
+        if let Some(banner) = self.render_update_banner(palette, cx) {
+            root = root.child(div().mb(px(8.0)).child(banner));
+        }
+
+        root.child(div().flex_1().min_h_0().w_full().h_full().child(content))
     }
 }

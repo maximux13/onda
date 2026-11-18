@@ -33,7 +33,6 @@ fn main() {
             let updater = Arc::new(Mutex::new(updater::UpdateController::new(
                 updater::UpdateConfig::from_env(),
             )));
-            let _updater_for_ui = Arc::clone(&updater);
 
             let updater_bg = Arc::clone(&updater);
             cx.spawn(async move |cx| {
@@ -94,6 +93,7 @@ fn main() {
                                     let is_dark = ThemePalette::resolve_is_dark(initial_theme);
 
                                     let engine_clone = Arc::clone(&engine);
+                                    let updater_clone = Arc::clone(&updater);
                                     let opened = cx.update(|cx| {
                                         let placement = platform::compute_popover_placement(
                                             cx,
@@ -135,7 +135,11 @@ fn main() {
                                                     )
                                                     .detach();
 
-                                                    TrayPopoverView::new(engine_clone, cx)
+                                                    TrayPopoverView::new(
+                                                        engine_clone,
+                                                        updater_clone,
+                                                        cx,
+                                                    )
                                                 });
 
                                                 view
