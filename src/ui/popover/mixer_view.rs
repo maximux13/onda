@@ -1,8 +1,9 @@
 use gpui::prelude::*;
-use gpui::{Context, FontWeight, div, px, rgb, rgba};
+use gpui::{Context, FontWeight, SharedString, div, px, rgb, rgba};
 
 use crate::ui::ThemePalette;
 use crate::ui::icons::{IconName, lucide_svg};
+use crate::ui::slider::VolumeSlider;
 use crate::updater::UpdateState;
 
 use super::TrayPopoverView;
@@ -237,6 +238,9 @@ impl TrayPopoverView {
                     .gap(px(8.0))
                     .on_click(cx.listener(|this, _event, _window, cx| {
                         this.show_output_picker = !this.show_output_picker;
+                        if this.show_output_picker {
+                            this.show_input_picker = false;
+                        }
                         cx.notify();
                     }))
                     .child(
@@ -366,6 +370,376 @@ impl TrayPopoverView {
             ))
     }
 
+    fn set_input_device_volume(
+        &mut self,
+        device_id: u32,
+        volume: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let clamped = volume.clamp(0.0, 1.0);
+        if let Some(dev) = self
+            .snapshot
+            .input_devices
+            .iter_mut()
+            .find(|d| d.id == device_id)
+        {
+            dev.volume = clamped;
+            if clamped > 0.001 && dev.muted {
+                dev.muted = false;
+            }
+        }
+        if let Ok(mut engine) = self.engine.lock() {
+            engine.set_input_device_volume(device_id, clamped);
+        }
+        cx.notify();
+    }
+
+    fn set_input_device_mute(&mut self, device_id: u32, muted: bool, cx: &mut Context<Self>) {
+        if let Some(dev) = self
+            .snapshot
+            .input_devices
+            .iter_mut()
+            .find(|d| d.id == device_id)
+        {
+            dev.muted = muted;
+        }
+        if let Ok(mut engine) = self.engine.lock() {
+            engine.set_input_device_mute(device_id, muted);
+        }
+        cx.notify();
+    }
+
+    fn set_default_input_device(&mut self, device_id: u32, cx: &mut Context<Self>) {
+        for dev in &mut self.snapshot.input_devices {
+            dev.is_default = dev.id == device_id;
+        }
+        if let Ok(mut engine) = self.engine.lock() {
+            engine.set_default_input_device(device_id);
+            self.snapshot = engine.snapshot();
+        }
+        self.show_input_picker = false;
+        cx.notify();
+    }
+
+    /// Renders the compact top-bar microphone gain, mute, and input device selector strip.
+    fn render_mic_control_bar(
+        &self,
+        palette: ThemePalette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let active_mic = self
+            .snapshot
+            .input_devices
+            .iter()
+            .find(|d| d.is_default)
+            .or_else(|| self.snapshot.input_devices.first());
+
+        let Some(dev) = active_mic else {
+            return div()
+                .w_full()
+                .py(px(4.0))
+                .px(px(2.0))
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .size(px(28.0))
+                        .rounded_full()
+                        .bg(palette.pill_bg)
+                        .border_1()
+                        .border_color(palette.card_border)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .flex_shrink_0()
+                        .child(lucide_svg(
+                            IconName::MIC_OFF,
+                            14.0,
+                            palette.text_secondary,
+                        )),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(palette.text_secondary)
+                        .child("No input device"),
+                );
+        };
+
+        let dev_id = dev.id;
+        let dev_name = dev.name.clone();
+        let dev_volume = dev.volume;
+        let dev_muted = dev.muted;
+        let pct = (dev_volume * 100.0).round() as u32;
+        let theme = self.snapshot.theme;
+        let entity_slider = cx.entity();
+
+        let (mic_icon, mic_color) = if dev_muted {
+            (IconName::MIC_OFF, palette.mute_red)
+        } else {
+            (IconName::MIC, palette.text_primary)
+        };
+
+        div()
+            .w_full()
+            .py(px(2.0))
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            // Left: Mic mute/unmute circular icon button
+            .child(
+                div()
+                    .id("mic-mute-btn")
+                    .size(px(28.0))
+                    .rounded_full()
+                    .bg(palette.pill_bg)
+                    .border_1()
+                    .border_color(palette.card_border)
+                    .hover(move |s| s.bg(palette.pill_hover_bg))
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .flex_shrink_0()
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.set_input_device_mute(dev_id, !dev_muted, cx);
+                    }))
+                    .child(lucide_svg(mic_icon, 14.0, mic_color)),
+            )
+            // Center-left: Clickable input device name pill
+            .child(
+                div()
+                    .id("mic-input-picker-btn")
+                    .max_w(px(165.0))
+                    .min_w(px(0.0))
+                    .px(px(10.0))
+                    .py(px(4.0))
+                    .rounded(px(8.0))
+                    .bg(if self.show_input_picker {
+                        palette.row_selected_bg
+                    } else {
+                        palette.card_bg
+                    })
+                    .border_1()
+                    .border_color(if self.show_input_picker {
+                        palette.row_selected_border
+                    } else {
+                        palette.card_border
+                    })
+                    .hover(move |s| {
+                        if self.show_input_picker {
+                            s.bg(palette.row_selected_bg)
+                        } else {
+                            s.bg(palette.pill_hover_bg)
+                        }
+                    })
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(6.0))
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.show_input_picker = !this.show_input_picker;
+                        if this.show_input_picker {
+                            this.show_output_picker = false;
+                        }
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .truncate()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(palette.text_primary)
+                            .child(dev_name),
+                    )
+                    .child(lucide_svg(
+                        IconName::CHEVRON_DOWN,
+                        12.0,
+                        palette.text_secondary,
+                    )),
+            )
+            // Right: Horizontal gain slider + percentage readout
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(80.0))
+                    .child(VolumeSlider::new(
+                        "slider-mic-gain",
+                        dev_volume,
+                        1.0,
+                        dev_muted,
+                        0x2582ff,
+                        theme,
+                        move |val, _window, cx| {
+                            entity_slider.update(cx, |this, cx| {
+                                this.set_input_device_volume(dev_id, val, cx);
+                            });
+                        },
+                    )),
+            )
+            .child(
+                div()
+                    .w(px(40.0))
+                    .py(px(2.0))
+                    .rounded(px(7.0))
+                    .bg(palette.pill_bg)
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(palette.text_primary)
+                    .child(format!("{pct}%")),
+            )
+    }
+
+    /// Renders a floating input device picker popover below the top-bar mic control strip.
+    fn render_input_picker_popover(
+        &self,
+        palette: ThemePalette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let surface_bg = if palette.is_dark {
+            rgba(0x1b2236f5)
+        } else {
+            rgba(0xf7f9fdf7)
+        };
+
+        let mut devices_list = div()
+            .id("input-picker-devices-scroll")
+            .w_full()
+            .max_h(px(220.0))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap(px(4.0));
+
+        for device in &self.snapshot.input_devices {
+            let dev_id = device.id;
+            let is_default = device.is_default;
+            let icon_color = if is_default {
+                rgb(0xffffff)
+            } else {
+                palette.text_primary
+            };
+
+            devices_list = devices_list.child(
+                div()
+                    .id(SharedString::from(format!("input-dev-select-{dev_id}")))
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(8.0))
+                    .px(px(8.0))
+                    .py(px(6.0))
+                    .rounded(px(10.0))
+                    .border_1()
+                    .border_color(if is_default {
+                        palette.row_selected_border
+                    } else {
+                        rgba(0x00000000)
+                    })
+                    .bg(if is_default {
+                        palette.row_selected_bg
+                    } else {
+                        rgba(0x00000000)
+                    })
+                    .hover(move |s| {
+                        if is_default {
+                            s.bg(palette.row_selected_bg)
+                        } else {
+                            s.bg(palette.row_hover_bg)
+                        }
+                    })
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.set_default_input_device(dev_id, cx);
+                    }))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .min_w_0()
+                            .flex_1()
+                            .child(
+                                div()
+                                    .size(px(24.0))
+                                    .rounded_full()
+                                    .bg(if is_default {
+                                        palette.accent_blue
+                                    } else {
+                                        palette.pill_bg
+                                    })
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .flex_shrink_0()
+                                    .child(lucide_svg(IconName::MIC, 13.0, icon_color)),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_xs()
+                                    .font_weight(if is_default {
+                                        FontWeight::SEMIBOLD
+                                    } else {
+                                        FontWeight::MEDIUM
+                                    })
+                                    .text_color(palette.text_primary)
+                                    .child(device.name.clone()),
+                            ),
+                    )
+                    .when(is_default, |el| {
+                        el.child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(palette.accent_blue)
+                                .flex_shrink_0()
+                                .child("Active"),
+                        )
+                    }),
+            );
+        }
+
+        div()
+            .id("input-picker-popover")
+            .w_full()
+            .p(px(10.0))
+            .rounded(px(12.0))
+            .bg(surface_bg)
+            .border_1()
+            .border_color(palette.panel_border)
+            .shadow_lg()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(|_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .px(px(2.0))
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(palette.text_secondary)
+                            .child("Input Devices"),
+                    ),
+            )
+            .child(devices_list)
+    }
+
     /// Renders View 1: Main `Onda` view.
     pub(super) fn render_mixer_view(
         &self,
@@ -437,6 +811,8 @@ impl TrayPopoverView {
             .gap(px(6.0))
             .child(self.render_mixer_header(palette, cx))
             .child(div().w_full().h(px(1.0)).bg(palette.divider))
+            .child(self.render_mic_control_bar(palette, cx))
+            .child(div().w_full().h(px(1.0)).bg(palette.divider))
             .child(self.render_apps_filter_bar(palette, cx))
             .child(scroll_area);
 
@@ -447,6 +823,32 @@ impl TrayPopoverView {
         }
 
         root = root.child(self.render_mixer_footer(palette, cx));
+
+        if self.show_input_picker {
+            root = root
+                .child(
+                    div()
+                        .id("input-picker-backdrop")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            this.show_input_picker = false;
+                            cx.notify();
+                            cx.stop_propagation();
+                        })),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(88.0))
+                        .left(px(0.0))
+                        .right(px(0.0))
+                        .child(self.render_input_picker_popover(palette, cx)),
+                );
+        }
 
         if self.show_output_picker {
             root = root

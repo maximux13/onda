@@ -56,6 +56,8 @@ lucide_icons! {
     INFO => "info.svg",
     SUN => "sun.svg",
     ARROW_LEFT => "arrow-left.svg",
+    MIC => "mic.svg",
+    MIC_OFF => "mic-off.svg",
 }
 
 /// Renders an embedded Lucide SVG vector icon at `size_px` tinted with `color`.
