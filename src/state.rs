@@ -69,12 +69,19 @@ fn default_eq_gains() -> [f32; 10] {
     [0.0; 10]
 }
 
+/// Default normalized glass opacity slider value (`0.50`, mapped to `80%` alpha in `[0.60, 1.00]`).
+pub const DEFAULT_GLASS_OPACITY: f32 = 0.50;
+
 fn default_true() -> bool {
     true
 }
 
 fn default_max_volume() -> f32 {
     2.0
+}
+
+fn default_glass_opacity() -> f32 {
+    DEFAULT_GLASS_OPACITY
 }
 
 /// Persisted or current volume/mute/EQ/routing setting for a single application.
@@ -135,6 +142,7 @@ pub struct MixerSnapshot {
     pub apps: Vec<AppRowState>,
     pub theme: ThemeMode,
     pub window_style: WindowStyle,
+    pub glass_opacity: f32,
     pub max_volume_limit: f32,
     pub restore_on_close: bool,
     pub show_in_menu_bar: bool,
@@ -153,6 +161,7 @@ impl Default for MixerSnapshot {
             apps: Vec::new(),
             theme: ThemeMode::Auto,
             window_style: WindowStyle::Transparent,
+            glass_opacity: DEFAULT_GLASS_OPACITY,
             max_volume_limit: 2.0,
             restore_on_close: false,
             show_in_menu_bar: true,
@@ -170,6 +179,8 @@ pub struct Preferences {
     pub theme: ThemeMode,
     #[serde(default)]
     pub window_style: WindowStyle,
+    #[serde(default = "default_glass_opacity")]
+    pub glass_opacity: f32,
     #[serde(default = "default_max_volume")]
     pub max_volume_limit: f32,
     #[serde(default)]
@@ -189,6 +200,7 @@ impl Default for Preferences {
         Self {
             theme: ThemeMode::Auto,
             window_style: WindowStyle::Transparent,
+            glass_opacity: DEFAULT_GLASS_OPACITY,
             max_volume_limit: 2.0,
             restore_on_close: false,
             show_in_menu_bar: true,

@@ -1,9 +1,10 @@
 use gpui::prelude::*;
-use gpui::{AnyElement, Context, FontWeight, div, px, rgb, rgba};
+use gpui::{AnyElement, Context, FontWeight, SharedString, div, px, rgb, rgba};
 
 use crate::state::{ThemeMode, WindowStyle};
 use crate::ui::ThemePalette;
 use crate::ui::icons::{IconName, lucide_svg};
+use crate::ui::slider::VolumeSlider;
 
 use super::{SettingsTab, TrayPopoverView};
 
@@ -37,6 +38,15 @@ impl TrayPopoverView {
         self.snapshot.window_style = style;
         if let Ok(mut engine) = self.engine.lock() {
             engine.set_window_style(style);
+        }
+        cx.notify();
+    }
+
+    fn set_glass_opacity(&mut self, opacity: f32, cx: &mut Context<Self>) {
+        let clamped = opacity.clamp(0.0, 1.0);
+        self.snapshot.glass_opacity = clamped;
+        if let Ok(mut engine) = self.engine.lock() {
+            engine.set_glass_opacity(clamped);
         }
         cx.notify();
     }
@@ -156,6 +166,10 @@ impl TrayPopoverView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let is_transparent = self.snapshot.window_style == WindowStyle::Transparent;
+        let glass_opacity = self.snapshot.glass_opacity.clamp(0.0, 1.0);
+        let glass_pct = format!("{}%", (glass_opacity * 100.0).round() as u32);
+        let theme = self.snapshot.theme;
+        let entity_opacity = cx.entity();
         let theme_label = match self.snapshot.theme {
             ThemeMode::Auto => "Auto",
             ThemeMode::Dark => "Dark",
@@ -334,6 +348,63 @@ impl TrayPopoverView {
                                             ),
                                     ),
                             )
+                            .when(is_transparent, |this| {
+                                this.child(div().w_full().h(px(1.0)).bg(palette.divider))
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .px(px(12.0))
+                                            .py(px(8.0))
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .gap(px(10.0))
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(palette.text_primary)
+                                                    .child("Glass opacity"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap(px(8.0))
+                                                    .child(div().w(px(96.0)).child(
+                                                        VolumeSlider::new(
+                                                            SharedString::from(
+                                                                "cfg-glass-opacity-slider",
+                                                            ),
+                                                            glass_opacity,
+                                                            1.0,
+                                                            false,
+                                                            0x1a73e8,
+                                                            theme,
+                                                            move |val, _window, cx| {
+                                                                entity_opacity.update(
+                                                                    cx,
+                                                                    |this, cx| {
+                                                                        this.set_glass_opacity(
+                                                                            val, cx,
+                                                                        );
+                                                                    },
+                                                                );
+                                                            },
+                                                        ),
+                                                    ))
+                                                    .child(
+                                                        div()
+                                                            .w(px(34.0))
+                                                            .text_right()
+                                                            .text_xs()
+                                                            .font_weight(FontWeight::MEDIUM)
+                                                            .text_color(palette.text_secondary)
+                                                            .child(glass_pct),
+                                                    ),
+                                            ),
+                                    )
+                            })
                             .child(div().w_full().h(px(1.0)).bg(palette.divider))
                             // Row 2: Theme (Auto / Dark / Light)
                             .child(
@@ -914,7 +985,6 @@ impl TrayPopoverView {
                                     .bg(palette.card_bg)
                                     .border_1()
                                     .border_color(palette.card_border)
-                                    .shadow_sm()
                                     .flex()
                                     .items_center()
                                     .justify_center()

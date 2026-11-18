@@ -9,10 +9,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gpui::prelude::*;
-use gpui::{AnyElement, Context, Image, ImageFormat, SharedString, Window, div, px, rgb};
+use gpui::{
+    AnyElement, Context, Image, ImageFormat, SharedString, Window, WindowBackgroundAppearance, div,
+    px, rgb,
+};
 
 use crate::audio::AudioEngine;
-use crate::state::MixerSnapshot;
+use crate::state::{MixerSnapshot, WindowStyle};
 use crate::ui::ThemePalette;
 
 /// Sidebar tab in the `Settings` view.
@@ -39,6 +42,8 @@ pub struct TrayPopoverView {
     pub(super) show_output_picker: bool,
     pub(super) launch_at_login: bool,
     pub(super) view_transition_id: u64,
+    last_window_style: Option<WindowStyle>,
+    last_is_dark: Option<bool>,
 }
 
 impl TrayPopoverView {
@@ -58,6 +63,8 @@ impl TrayPopoverView {
             show_output_picker: false,
             launch_at_login: crate::launch_agent::is_launch_at_login_enabled(),
             view_transition_id: 0,
+            last_window_style: None,
+            last_is_dark: None,
         };
         view.refresh(cx);
 
@@ -147,8 +154,31 @@ impl TrayPopoverView {
 }
 
 impl Render for TrayPopoverView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = ThemePalette::for_theme(self.snapshot.theme, self.snapshot.window_style);
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = ThemePalette::for_theme_with_opacity(
+            self.snapshot.theme,
+            self.snapshot.window_style,
+            self.snapshot.glass_opacity,
+        );
+        let is_transparent = self.snapshot.window_style == WindowStyle::Transparent;
+
+        if self.last_window_style != Some(self.snapshot.window_style)
+            || self.last_is_dark != Some(palette.is_dark)
+        {
+            window.set_background_appearance(if is_transparent {
+                WindowBackgroundAppearance::Blurred
+            } else {
+                WindowBackgroundAppearance::Opaque
+            });
+            crate::platform::configure_popover_glass(
+                crate::POPOVER_WIDTH,
+                crate::POPOVER_HEIGHT,
+                is_transparent,
+                palette.is_dark,
+            );
+            self.last_window_style = Some(self.snapshot.window_style);
+            self.last_is_dark = Some(palette.is_dark);
+        }
 
         let content: AnyElement = if self.show_settings {
             self.render_settings_view(palette, cx).into_any_element()
@@ -162,6 +192,9 @@ impl Render for TrayPopoverView {
             .flex()
             .flex_col()
             .p(px(16.0))
+            .rounded(px(10.0))
+            .border_1()
+            .border_color(palette.panel_border)
             .bg(palette.panel_bg)
             .text_color(palette.text_primary)
             .child(div().flex_1().min_h_0().w_full().h_full().child(content))

@@ -1,7 +1,11 @@
 use gpui::{App, Bounds, DisplayId, Pixels, Point, Size, px};
 use objc2::MainThreadMarker;
-use objc2_app_kit::{NSApplication, NSEvent, NSScreen};
-use objc2_foundation::NSPoint;
+use objc2_app_kit::{
+    NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
+    NSApplication, NSEvent, NSScreen, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
+    NSVisualEffectState, NSVisualEffectView, NSWindow,
+};
+use objc2_foundation::{NSPoint, NSUserDefaults, ns_string};
 
 const EDGE_MARGIN: f64 = 8.0;
 const MENU_BAR_GAP: f64 = 6.0;
@@ -168,6 +172,57 @@ impl CaTransform3D {
     }
 }
 
+/// Returns `true` when macOS is currently configured for Dark appearance
+/// (`AppleInterfaceStyle == "Dark"` in standard user defaults).
+pub fn is_system_dark_mode() -> bool {
+    let defaults = NSUserDefaults::standardUserDefaults();
+    defaults
+        .stringForKey(ns_string!("AppleInterfaceStyle"))
+        .is_some_and(|style| style.to_string().eq_ignore_ascii_case("Dark"))
+}
+
+/// Invokes `f` on any open AppKit window whose size matches `(width, height)`.
+fn with_popover_window(width: f64, height: f64, mut f: impl FnMut(&NSWindow)) {
+    if let Some(mtm) = MainThreadMarker::new() {
+        let app = NSApplication::sharedApplication(mtm);
+        for win in app.windows().iter() {
+            let frame = win.frame();
+            if (frame.size.width - width).abs() < 2.0 && (frame.size.height - height).abs() < 2.0 {
+                f(&win);
+            }
+        }
+    }
+}
+
+/// Synchronizes the popover `NSWindow` appearance (`Aqua` vs `DarkAqua`) and
+/// configures its `NSVisualEffectView` backdrop for crisp macOS glassmorphism
+/// when `is_transparent` is enabled.
+pub fn configure_popover_glass(width: f64, height: f64, is_transparent: bool, is_dark: bool) {
+    with_popover_window(width, height, |win| {
+        // SAFETY: `NSAppearanceNameDarkAqua` and `NSAppearanceNameAqua` are static AppKit constants.
+        let appearance_name = unsafe {
+            if is_dark {
+                NSAppearanceNameDarkAqua
+            } else {
+                NSAppearanceNameAqua
+            }
+        };
+        if let Some(appearance) = NSAppearance::appearanceNamed(appearance_name) {
+            win.setAppearance(Some(&appearance));
+        }
+
+        if is_transparent && let Some(content_view) = win.contentView() {
+            for subview in content_view.subviews().iter() {
+                if let Ok(effect_view) = subview.downcast::<NSVisualEffectView>() {
+                    effect_view.setMaterial(NSVisualEffectMaterial::Sheet);
+                    effect_view.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+                    effect_view.setState(NSVisualEffectState::Active);
+                }
+            }
+        }
+    });
+}
+
 /// Updates any open AppKit window matching `(width, height)` to top-left
 /// `(ns_x, top_y_appkit)` in AppKit coordinates, opacity `alpha` (`0.0..=1.0`),
 /// and Core Animation layer scale `scale` anchored at top-center.
@@ -179,31 +234,22 @@ pub fn set_popover_window_state(
     alpha: f64,
     scale: f64,
 ) {
-    if let Some(mtm) = MainThreadMarker::new() {
-        let app = NSApplication::sharedApplication(mtm);
-        for win in app.windows().iter() {
-            let frame = win.frame();
-            if (frame.size.width - width).abs() < 2.0 && (frame.size.height - height).abs() < 2.0 {
-                win.setFrameTopLeftPoint(NSPoint::new(ns_x, top_y_appkit));
-                win.setAlphaValue(alpha.clamp(0.0, 1.0));
-                if let Some(content_view) = win.contentView() {
-                    content_view.setWantsLayer(true);
-                    if let Some(layer) = content_view.layer() {
-                        let transform = CaTransform3D::scale_from_top_center(
-                            scale.clamp(0.5, 1.0),
-                            width,
-                            height,
-                        );
-                        // SAFETY: `layer` is a valid `CALayer` on the main thread and `setTransform:`
-                        // takes a `CATransform3D` (`16 x f64`) by value.
-                        unsafe {
-                            let _: () = objc2::msg_send![&*layer, setTransform: transform];
-                        }
-                    }
+    with_popover_window(width, height, |win| {
+        win.setFrameTopLeftPoint(NSPoint::new(ns_x, top_y_appkit));
+        win.setAlphaValue(alpha.clamp(0.0, 1.0));
+        if let Some(content_view) = win.contentView() {
+            content_view.setWantsLayer(true);
+            if let Some(layer) = content_view.layer() {
+                let transform =
+                    CaTransform3D::scale_from_top_center(scale.clamp(0.5, 1.0), width, height);
+                // SAFETY: `layer` is a valid `CALayer` on the main thread and `setTransform:`
+                // takes a `CATransform3D` (`16 x f64`) by value.
+                unsafe {
+                    let _: () = objc2::msg_send![&*layer, setTransform: transform];
                 }
             }
         }
-    }
+    });
 }
 
 /// Computes `(top_y_appkit, alpha, scale)` for a snappy ease-out-quint window

@@ -359,6 +359,7 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
             apps,
             theme: self.prefs.theme,
             window_style: self.prefs.window_style,
+            glass_opacity: self.prefs.glass_opacity,
             max_volume_limit: self.prefs.max_volume_limit,
             restore_on_close: self.prefs.restore_on_close,
             show_in_menu_bar: self.prefs.show_in_menu_bar,
@@ -483,6 +484,12 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
 
     pub fn set_window_style(&mut self, style: WindowStyle) {
         self.prefs.window_style = style;
+        self.save_prefs();
+    }
+
+    /// Sets the normalized glass opacity slider value (`0.0..=1.0`) and persists preferences.
+    pub fn set_glass_opacity(&mut self, opacity: f32) {
+        self.prefs.glass_opacity = opacity.clamp(0.0, 1.0);
         self.save_prefs();
     }
 

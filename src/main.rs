@@ -16,8 +16,11 @@ use std::time::Duration;
 use tray::TrayCommand;
 use ui::popover::TrayPopoverView;
 
-const POPOVER_WIDTH: f64 = 460.0;
-const POPOVER_HEIGHT: f64 = 560.0;
+use crate::state::WindowStyle;
+use crate::ui::ThemePalette;
+
+pub(crate) const POPOVER_WIDTH: f64 = 460.0;
+pub(crate) const POPOVER_HEIGHT: f64 = 560.0;
 
 fn main() {
     Application::new()
@@ -63,6 +66,16 @@ fn main() {
                                         });
                                     }
                                 } else {
+                                    let (initial_style, initial_theme) = engine
+                                        .lock()
+                                        .map(|mut e| {
+                                            let snap = e.snapshot();
+                                            (snap.window_style, snap.theme)
+                                        })
+                                        .unwrap_or_default();
+                                    let is_transparent = initial_style == WindowStyle::Transparent;
+                                    let is_dark = ThemePalette::resolve_is_dark(initial_theme);
+
                                     let engine_clone = Arc::clone(&engine);
                                     let opened = cx.update(|cx| {
                                         let placement = platform::compute_popover_placement(
@@ -82,7 +95,11 @@ fn main() {
                                             show: true,
                                             is_movable: false,
                                             is_resizable: false,
-                                            window_background: WindowBackgroundAppearance::Blurred,
+                                            window_background: if is_transparent {
+                                                WindowBackgroundAppearance::Blurred
+                                            } else {
+                                                WindowBackgroundAppearance::Opaque
+                                            },
                                             ..Default::default()
                                         };
 
@@ -113,6 +130,12 @@ fn main() {
                                                 placement.top_y_appkit,
                                                 0.0,
                                             );
+                                        platform::configure_popover_glass(
+                                            POPOVER_WIDTH,
+                                            POPOVER_HEIGHT,
+                                            is_transparent,
+                                            is_dark,
+                                        );
                                         platform::set_popover_window_state(
                                             POPOVER_WIDTH,
                                             POPOVER_HEIGHT,
