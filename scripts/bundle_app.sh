@@ -3,6 +3,9 @@ set -euo pipefail
 
 PROFILE="${1:-debug}"
 if [ "$PROFILE" = "release" ]; then
+    cargo fmt --check
+    cargo clippy --all-targets --all-features --locked -- -D warnings
+    cargo test
     cargo build --release
     BIN_PATH="target/release/onda"
     APP_DIR="target/release/Onda.app"

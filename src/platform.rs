@@ -115,18 +115,105 @@ pub fn compute_popover_placement(cx: &App, width: f64, height: f64) -> PopoverPl
     }
 }
 
-/// Explicitly pins any open AppKit window matching `(width, height)` to
-/// `(ns_x, top_y_appkit)` in AppKit coordinates right below the menu bar.
-pub fn pin_popover_top_left(width: f64, height: f64, ns_x: f64, top_y_appkit: f64) {
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CaTransform3D {
+    m11: f64,
+    m12: f64,
+    m13: f64,
+    m14: f64,
+    m21: f64,
+    m22: f64,
+    m23: f64,
+    m24: f64,
+    m31: f64,
+    m32: f64,
+    m33: f64,
+    m34: f64,
+    m41: f64,
+    m42: f64,
+    m43: f64,
+    m44: f64,
+}
+
+// SAFETY: `CaTransform3D` is `#[repr(C)]` with 16 `f64` (`CGFloat` on 64-bit macOS) fields,
+// matching Objective-C's `CATransform3D` ABI layout and encoding.
+unsafe impl objc2::Encode for CaTransform3D {
+    const ENCODING: objc2::Encoding =
+        objc2::Encoding::Struct("CATransform3D", &[f64::ENCODING; 16]);
+}
+
+impl CaTransform3D {
+    fn scale_from_top_center(scale: f64, width: f64, height: f64) -> Self {
+        let tx = width * (1.0 - scale) * 0.5;
+        let ty = height * (1.0 - scale);
+        Self {
+            m11: scale,
+            m12: 0.0,
+            m13: 0.0,
+            m14: 0.0,
+            m21: 0.0,
+            m22: scale,
+            m23: 0.0,
+            m24: 0.0,
+            m31: 0.0,
+            m32: 0.0,
+            m33: 1.0,
+            m34: 0.0,
+            m41: tx,
+            m42: ty,
+            m43: 0.0,
+            m44: 1.0,
+        }
+    }
+}
+
+/// Updates any open AppKit window matching `(width, height)` to top-left
+/// `(ns_x, top_y_appkit)` in AppKit coordinates, opacity `alpha` (`0.0..=1.0`),
+/// and Core Animation layer scale `scale` anchored at top-center.
+pub fn set_popover_window_state(
+    width: f64,
+    height: f64,
+    ns_x: f64,
+    top_y_appkit: f64,
+    alpha: f64,
+    scale: f64,
+) {
     if let Some(mtm) = MainThreadMarker::new() {
         let app = NSApplication::sharedApplication(mtm);
         for win in app.windows().iter() {
             let frame = win.frame();
             if (frame.size.width - width).abs() < 2.0 && (frame.size.height - height).abs() < 2.0 {
                 win.setFrameTopLeftPoint(NSPoint::new(ns_x, top_y_appkit));
+                win.setAlphaValue(alpha.clamp(0.0, 1.0));
+                if let Some(content_view) = win.contentView() {
+                    content_view.setWantsLayer(true);
+                    if let Some(layer) = content_view.layer() {
+                        let transform = CaTransform3D::scale_from_top_center(
+                            scale.clamp(0.5, 1.0),
+                            width,
+                            height,
+                        );
+                        // SAFETY: `layer` is a valid `CALayer` on the main thread and `setTransform:`
+                        // takes a `CATransform3D` (`16 x f64`) by value.
+                        unsafe {
+                            let _: () = objc2::msg_send![&*layer, setTransform: transform];
+                        }
+                    }
+                }
             }
         }
     }
+}
+
+/// Computes `(top_y_appkit, alpha, scale)` for a snappy ease-out-quint window
+/// slide-down from `42px` above `target_top_y` with a `0.92 -> 1.0` scale-up.
+pub fn popover_slide_down_step(target_top_y: f64, progress: f32) -> (f64, f64, f64) {
+    let t = f64::from(progress.clamp(0.0, 1.0));
+    let eased = 1.0 - (1.0 - t).powi(5);
+    let y = target_top_y + (1.0 - eased) * 42.0;
+    let scale = 0.92 + 0.08 * eased;
+    (y, eased, scale)
 }
 
 #[cfg(test)]
@@ -159,7 +246,22 @@ mod tests {
 
     #[test]
     fn clamped_x_handles_narrow_display() {
-        let x = compute_clamped_x(100.0, 0.0, 400.0, 460.0);
-        assert!((x - EDGE_MARGIN).abs() < f64::EPSILON);
+        assert_eq!(compute_clamped_x(100.0, 0.0, 400.0, 460.0), EDGE_MARGIN);
+    }
+
+    #[test]
+    fn popover_slide_down_step_should_start_above_and_transparent_when_progress_zero() {
+        let (y, alpha, scale) = popover_slide_down_step(800.0, 0.0);
+        assert_eq!(y, 842.0);
+        assert_eq!(alpha, 0.0);
+        assert!((scale - 0.92).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn popover_slide_down_step_should_settle_at_target_when_progress_one() {
+        let (y, alpha, scale) = popover_slide_down_step(800.0, 1.0);
+        assert_eq!(y, 800.0);
+        assert_eq!(alpha, 1.0);
+        assert!((scale - 1.0).abs() < f64::EPSILON);
     }
 }

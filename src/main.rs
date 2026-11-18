@@ -108,12 +108,54 @@ fn main() {
                                             })
                                             .ok();
 
-                                        platform::pin_popover_top_left(
+                                        let (start_y, start_alpha, start_scale) =
+                                            platform::popover_slide_down_step(
+                                                placement.top_y_appkit,
+                                                0.0,
+                                            );
+                                        platform::set_popover_window_state(
                                             POPOVER_WIDTH,
                                             POPOVER_HEIGHT,
                                             placement.ns_x,
-                                            placement.top_y_appkit,
+                                            start_y,
+                                            start_alpha,
+                                            start_scale,
                                         );
+
+                                        if res.is_some() {
+                                            let ns_x = placement.ns_x;
+                                            let target_y = placement.top_y_appkit;
+                                            cx.spawn(async move |cx| {
+                                                let start = std::time::Instant::now();
+                                                let duration = Duration::from_millis(140);
+                                                loop {
+                                                    cx.background_executor()
+                                                        .timer(Duration::from_millis(8))
+                                                        .await;
+                                                    let progress = (start.elapsed().as_secs_f32()
+                                                        / duration.as_secs_f32())
+                                                    .min(1.0);
+                                                    let (y, alpha, scale) =
+                                                        platform::popover_slide_down_step(
+                                                            target_y, progress,
+                                                        );
+                                                    let _ = cx.update(|_| {
+                                                        platform::set_popover_window_state(
+                                                            POPOVER_WIDTH,
+                                                            POPOVER_HEIGHT,
+                                                            ns_x,
+                                                            y,
+                                                            alpha,
+                                                            scale,
+                                                        );
+                                                    });
+                                                    if progress >= 1.0 {
+                                                        break;
+                                                    }
+                                                }
+                                            })
+                                            .detach();
+                                        }
 
                                         res
                                     });
