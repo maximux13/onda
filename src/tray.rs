@@ -5,6 +5,15 @@ use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
+/// Errors returned when initializing the menu bar tray icon.
+#[derive(Debug, thiserror::Error)]
+pub enum TrayError {
+    #[error("failed to create tray icon image: {0}")]
+    IconImage(#[from] tray_icon::BadIcon),
+    #[error("failed to build tray icon: {0}")]
+    BuildTray(#[from] tray_icon::Error),
+}
+
 /// Commands emitted by the macOS menu bar tray icon.
 #[derive(Debug, Clone, Copy)]
 pub enum TrayCommand {
@@ -33,7 +42,7 @@ pub fn set_accessory_activation_policy() {
 
 /// Initializes the menu bar tray icon and returns a handle plus a receiver of
 /// [`TrayCommand`] events.
-pub fn init_tray() -> Result<(TrayHandle, Receiver<TrayCommand>), String> {
+pub fn init_tray() -> Result<(TrayHandle, Receiver<TrayCommand>), TrayError> {
     let (tx, rx) = mpsc::channel::<TrayCommand>();
 
     TrayIconEvent::set_event_handler(Some(move |event| {
@@ -58,8 +67,7 @@ pub fn init_tray() -> Result<(TrayHandle, Receiver<TrayCommand>), String> {
     let tray_icon = TrayIconBuilder::new()
         .with_icon_templated(icon)
         .with_tooltip("Onda")
-        .build()
-        .map_err(|e| format!("Failed to build tray icon: {e}"))?;
+        .build()?;
 
     Ok((
         TrayHandle {
@@ -73,7 +81,7 @@ pub fn init_tray() -> Result<(TrayHandle, Receiver<TrayCommand>), String> {
 ///
 /// macOS template images are rendered using only their alpha channel and
 /// automatically tinted for light/dark menu bars.
-fn build_template_speaker_icon() -> Result<Icon, String> {
+fn build_template_speaker_icon() -> Result<Icon, TrayError> {
     const SIZE: usize = 36;
     let mut rgba = vec![0u8; SIZE * SIZE * 4];
 
@@ -92,8 +100,7 @@ fn build_template_speaker_icon() -> Result<Icon, String> {
         }
     }
 
-    Icon::from_rgba(rgba, SIZE as u32, SIZE as u32)
-        .map_err(|e| format!("Failed to create tray icon image: {e}"))
+    Ok(Icon::from_rgba(rgba, SIZE as u32, SIZE as u32)?)
 }
 
 fn speaker_icon_coverage(x: f32, y: f32) -> f32 {

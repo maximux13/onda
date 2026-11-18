@@ -1,8 +1,6 @@
 #![allow(dead_code)]
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
 
 /// Center frequencies (Hz) for the 10-band equalizer.
 pub const EQ_FREQUENCIES: [f32; 10] = [
@@ -197,41 +195,6 @@ impl Default for Preferences {
             global_eq_enabled: true,
             global_eq_gains: [0.0; 10],
             apps: HashMap::new(),
-        }
-    }
-}
-
-impl Preferences {
-    fn config_path() -> Option<PathBuf> {
-        let home = std::env::var_os("HOME")?;
-        Some(
-            PathBuf::from(home)
-                .join("Library")
-                .join("Application Support")
-                .join("Onda")
-                .join("volumes.json"),
-        )
-    }
-
-    pub fn load() -> Self {
-        let Some(path) = Self::config_path() else {
-            return Self::default();
-        };
-        let Ok(contents) = fs::read_to_string(path) else {
-            return Self::default();
-        };
-        serde_json::from_str(&contents).unwrap_or_default()
-    }
-
-    pub fn save(&self) {
-        let Some(path) = Self::config_path() else {
-            return;
-        };
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        if let Ok(json) = serde_json::to_string_pretty(self) {
-            let _ = fs::write(path, json);
         }
     }
 }

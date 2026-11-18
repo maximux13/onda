@@ -24,6 +24,21 @@ use crate::state::EQ_FREQUENCIES;
 const SAMPLE_RATE: f32 = 48_000.0;
 const BIQUAD_Q: f32 = 1.414;
 
+/// Errors returned when creating a Core Audio process tap.
+#[derive(Debug, thiserror::Error)]
+pub enum TapError {
+    #[error("no process object IDs provided")]
+    EmptyProcessIds,
+    #[error("AudioHardwareCreateProcessTap failed with OSStatus {0}")]
+    CreateProcessTap(i32),
+    #[error("AudioHardwareCreateAggregateDevice failed with OSStatus {0}")]
+    CreateAggregateDevice(i32),
+    #[error("AudioDeviceCreateIOProcID failed with OSStatus {0}")]
+    CreateIoProcId(i32),
+    #[error("AudioDeviceStart failed with OSStatus {0}")]
+    StartDevice(i32),
+}
+
 #[derive(Clone, Copy)]
 struct BiquadBand {
     b0: f32,
@@ -311,9 +326,9 @@ pub fn create_process_tap(
     muted: bool,
     eq_enabled: bool,
     eq_gains: &[f32; 10],
-) -> Result<AppTapHandle, String> {
+) -> Result<AppTapHandle, TapError> {
     if process_object_ids.is_empty() {
-        return Err("No process object IDs provided".to_string());
+        return Err(TapError::EmptyProcessIds);
     }
     let proc_nums: Vec<objc2::rc::Retained<NSNumber>> = process_object_ids
         .iter()
@@ -335,9 +350,7 @@ pub fn create_process_tap(
     let mut tap_id: u32 = 0;
     let status = unsafe { AudioHardwareCreateProcessTap(Some(&tap_desc), &mut tap_id) };
     if status != 0 {
-        return Err(format!(
-            "AudioHardwareCreateProcessTap failed with OSStatus {status}"
-        ));
+        return Err(TapError::CreateProcessTap(status));
     }
 
     let agg_uid = NSUUID::UUID().UUIDString().to_string();
@@ -408,9 +421,7 @@ pub fn create_process_tap(
         unsafe {
             let _ = AudioHardwareDestroyProcessTap(tap_id);
         }
-        return Err(format!(
-            "AudioHardwareCreateAggregateDevice failed with OSStatus {status}"
-        ));
+        return Err(TapError::CreateAggregateDevice(status));
     }
 
     let gain = Arc::new(AtomicU32::new(volume.clamp(0.0, 2.0).to_bits()));
@@ -449,9 +460,7 @@ pub fn create_process_tap(
             let _ = AudioHardwareDestroyProcessTap(tap_id);
             drop(Box::from_raw(ctx_ptr));
         }
-        return Err(format!(
-            "AudioDeviceCreateIOProcID failed with OSStatus {status}"
-        ));
+        return Err(TapError::CreateIoProcId(status));
     }
 
     let status = unsafe { AudioDeviceStart(aggregate_device_id, io_proc_id) };
@@ -462,7 +471,7 @@ pub fn create_process_tap(
             let _ = AudioHardwareDestroyProcessTap(tap_id);
             drop(Box::from_raw(ctx_ptr));
         }
-        return Err(format!("AudioDeviceStart failed with OSStatus {status}"));
+        return Err(TapError::StartDevice(status));
     }
 
     Ok(AppTapHandle {

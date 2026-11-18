@@ -2,6 +2,7 @@ mod audio;
 mod launch_agent;
 mod platform;
 mod state;
+mod storage;
 mod tray;
 mod ui;
 

@@ -12,6 +12,7 @@ use crate::state::{
     AppRowState, AppVolumeConfig, DeviceIconKind, MixerSnapshot, Preferences, ThemeMode,
     WindowStyle,
 };
+use crate::storage::{JsonFileStore, PreferencesStore};
 use tap::AppTapHandle;
 
 struct ActiveTap {
@@ -22,6 +23,7 @@ struct ActiveTap {
 /// Coordinates Core Audio discovery, output device controls, per-app process taps,
 /// real-time 10-band peaking EQ, peak metering, and persisted preferences.
 pub struct AudioEngine {
+    store: JsonFileStore,
     prefs: Preferences,
     taps: HashMap<String, ActiveTap>,
     configs: HashMap<String, AppVolumeConfig>,
@@ -33,9 +35,11 @@ pub struct AudioEngine {
 
 impl AudioEngine {
     pub fn new() -> Self {
-        let prefs = Preferences::load();
+        let store = JsonFileStore::default();
+        let prefs = store.load();
         let configs = prefs.apps.clone();
         Self {
+            store,
             prefs,
             taps: HashMap::new(),
             configs,
@@ -44,6 +48,10 @@ impl AudioEngine {
             last_device_uids: HashSet::new(),
             selected_eq_app: None,
         }
+    }
+
+    fn save_prefs(&self) {
+        let _ = self.store.save(&self.prefs);
     }
 
     fn resolve_target_uid(&self, config: &AppVolumeConfig) -> Option<String> {
@@ -244,7 +252,7 @@ impl AudioEngine {
         self.prefs
             .apps
             .insert(bundle_id.to_string(), updated.clone());
-        self.prefs.save();
+        self.save_prefs();
         self.ensure_tap(bundle_id, &updated);
     }
 
@@ -294,7 +302,7 @@ impl AudioEngine {
             });
         } else {
             self.prefs.global_eq_enabled = enabled;
-            self.prefs.save();
+            self.save_prefs();
             self.refresh_all_taps();
         }
     }
@@ -310,7 +318,7 @@ impl AudioEngine {
             });
         } else {
             self.prefs.global_eq_gains[band_idx] = clamped;
-            self.prefs.save();
+            self.save_prefs();
             self.refresh_all_taps();
         }
     }
@@ -322,14 +330,14 @@ impl AudioEngine {
             });
         } else {
             self.prefs.global_eq_gains = [0.0; 10];
-            self.prefs.save();
+            self.save_prefs();
             self.refresh_all_taps();
         }
     }
 
     pub fn set_theme(&mut self, theme: ThemeMode) {
         self.prefs.theme = theme;
-        self.prefs.save();
+        self.save_prefs();
     }
 
     pub fn toggle_theme(&mut self) -> ThemeMode {
@@ -343,7 +351,7 @@ impl AudioEngine {
 
     pub fn set_window_style(&mut self, style: WindowStyle) {
         self.prefs.window_style = style;
-        self.prefs.save();
+        self.save_prefs();
     }
 
     pub fn set_max_volume_limit(&mut self, limit: f32) {
@@ -365,24 +373,24 @@ impl AudioEngine {
                 config.boost_enabled = false;
             }
         }
-        self.prefs.save();
+        self.save_prefs();
         self.refresh_all_taps();
     }
 
     pub fn set_restore_on_close(&mut self, restore: bool) {
         self.prefs.restore_on_close = restore;
-        self.prefs.save();
+        self.save_prefs();
     }
 
     pub fn set_show_in_menu_bar(&mut self, show: bool) {
         self.prefs.show_in_menu_bar = show;
-        self.prefs.save();
+        self.save_prefs();
     }
 
     pub fn reset_saved_app_configs(&mut self) {
         self.configs.clear();
         self.prefs.apps.clear();
-        self.prefs.save();
+        self.save_prefs();
         self.taps.clear();
         self.selected_eq_app = None;
     }
