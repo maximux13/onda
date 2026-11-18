@@ -93,10 +93,13 @@ impl TrayPopoverView {
                             .items_center()
                             .justify_center()
                             .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.show_settings = true;
-                                this.launch_at_login =
-                                    crate::launch_agent::is_launch_at_login_enabled();
-                                cx.notify();
+                                if !this.show_settings {
+                                    this.show_settings = true;
+                                    this.launch_at_login =
+                                        crate::launch_agent::is_launch_at_login_enabled();
+                                    this.bump_view_transition();
+                                    cx.notify();
+                                }
                             }))
                             .child(lucide_svg(IconName::SETTINGS, 16.0, palette.text_primary)),
                     )

@@ -124,8 +124,11 @@ impl TrayPopoverView {
             .items_center()
             .gap(px(8.0))
             .on_click(cx.listener(move |this, _event, _window, cx| {
-                this.settings_tab = tab;
-                cx.notify();
+                if this.settings_tab != tab {
+                    this.settings_tab = tab;
+                    this.bump_view_transition();
+                    cx.notify();
+                }
             }))
             .child(lucide_svg(icon_path, 15.0, icon_color))
             .child(
@@ -959,8 +962,11 @@ impl TrayPopoverView {
                             .items_center()
                             .gap(px(5.0))
                             .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.show_settings = false;
-                                cx.notify();
+                                if this.show_settings {
+                                    this.show_settings = false;
+                                    this.bump_view_transition();
+                                    cx.notify();
+                                }
                             }))
                             .child(lucide_svg(IconName::ARROW_LEFT, 12.0, palette.text_primary))
                             .child(

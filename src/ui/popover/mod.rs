@@ -41,6 +41,7 @@ pub struct TrayPopoverView {
     pub(super) advanced_mode: bool,
     pub(super) show_output_picker: bool,
     pub(super) launch_at_login: bool,
+    pub(super) view_transition_id: u64,
 }
 
 impl TrayPopoverView {
@@ -59,6 +60,7 @@ impl TrayPopoverView {
             advanced_mode: false,
             show_output_picker: false,
             launch_at_login: crate::launch_agent::is_launch_at_login_enabled(),
+            view_transition_id: 0,
         };
         view.refresh(cx);
 
@@ -80,6 +82,11 @@ impl TrayPopoverView {
     /// Returns whether the popover is pinned by the user (preventing auto-close on blur).
     pub fn is_pinned(&self) -> bool {
         self.is_pinned
+    }
+
+    /// Advances the view transition ID so GPUI replays the view-switch animation.
+    pub(super) fn bump_view_transition(&mut self) {
+        self.view_transition_id = self.view_transition_id.wrapping_add(1);
     }
 
     /// Re-reads the current audio state from [`AudioEngine`] and updates the UI.
@@ -164,7 +171,19 @@ impl Render for TrayPopoverView {
             .border_color(palette.panel_border)
             .shadow_lg()
             .text_color(palette.text_primary)
-            .child(content)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .h_full()
+                    .child(content)
+                    .with_animation(
+                        ("view-switch", self.view_transition_id),
+                        Animation::new(Duration::from_millis(150)).with_easing(ease_out_quint()),
+                        |el, delta| el.opacity(delta),
+                    ),
+            )
             .with_animation(
                 "popover-enter",
                 Animation::new(Duration::from_millis(180)).with_easing(ease_out_quint()),
