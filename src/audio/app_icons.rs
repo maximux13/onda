@@ -32,17 +32,25 @@ fn extract_rep_dominant_color(rep: &NSBitmapImageRep) -> u32 {
     let width = rep.pixelsWide().max(0) as usize;
     let height = rep.pixelsHigh().max(0) as usize;
     let row_bytes = width.saturating_mul(4);
-    let bytes_per_row = rep.bytesPerRow().max(row_bytes as isize) as usize;
+    let Ok(bytes_per_row) = usize::try_from(rep.bytesPerRow()) else {
+        return DEFAULT_DOMINANT_COLOR;
+    };
     if width == 0 || height == 0 || bytes_per_row < row_bytes {
         return DEFAULT_DOMINANT_COLOR;
     }
-    // SAFETY: `bitmapData()` returns a valid pointer to at least `height * bytes_per_row`
-    // bytes owned by `rep` for the lifetime of `&rep`.
-    let raw = unsafe { std::slice::from_raw_parts(data_ptr, height * bytes_per_row) };
+    let Some(total_bytes) = height.checked_mul(bytes_per_row) else {
+        return DEFAULT_DOMINANT_COLOR;
+    };
+    // SAFETY: `bitmapData()` returns a valid pointer to at least `total_bytes`
+    // (`height * bytes_per_row`) bytes owned by `rep` for the lifetime of `&rep`.
+    let raw = unsafe { std::slice::from_raw_parts(data_ptr, total_bytes) };
     if bytes_per_row == row_bytes {
         extract_dominant_color_from_rgba(raw, width, height)
     } else {
-        let mut packed = Vec::with_capacity(height * row_bytes);
+        let Some(packed_len) = height.checked_mul(row_bytes) else {
+            return DEFAULT_DOMINANT_COLOR;
+        };
+        let mut packed = Vec::with_capacity(packed_len);
         for y in 0..height {
             let start = y * bytes_per_row;
             packed.extend_from_slice(&raw[start..start + row_bytes]);

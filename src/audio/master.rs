@@ -25,10 +25,12 @@ const K_AUDIO_HARDWARE_SERVICE_DEVICE_PROPERTY_VIRTUAL_MAIN_VOLUME: AudioObjectP
     0x766d7663;
 
 fn has_settable_property(object_id: AudioObjectID, address: &AudioObjectPropertyAddress) -> bool {
+    // SAFETY: `address` is a valid reference to an initialized `AudioObjectPropertyAddress`.
     if !unsafe { AudioObjectHasProperty(object_id, NonNull::from(address)) } {
         return false;
     }
     let mut settable = 0u8;
+    // SAFETY: `address` and `settable` are valid, aligned, and non-null for the duration of the call.
     let status = unsafe {
         AudioObjectIsPropertySettable(
             object_id,
@@ -44,6 +46,7 @@ fn set_f32_property(
     address: &AudioObjectPropertyAddress,
     value: f32,
 ) -> Result<(), String> {
+    // SAFETY: `address` and `value` are valid, and `size_of::<f32>()` matches the pointed-to `f32`.
     let status = unsafe {
         AudioObjectSetPropertyData(
             object_id,
@@ -68,6 +71,7 @@ fn set_u32_property(
     address: &AudioObjectPropertyAddress,
     value: u32,
 ) -> Result<(), String> {
+    // SAFETY: `address` and `value` are valid, and `size_of::<u32>()` matches the pointed-to `u32`.
     let status = unsafe {
         AudioObjectSetPropertyData(
             object_id,
@@ -127,6 +131,7 @@ fn device_output_channel_count(device_id: u32) -> u32 {
         mElement: kAudioObjectPropertyElementMain,
     };
     let mut data_size: u32 = 0;
+    // SAFETY: `address` and `data_size` are valid, aligned, and non-null for the duration of the call.
     let status = unsafe {
         AudioObjectGetPropertyDataSize(
             device_id,
@@ -145,6 +150,7 @@ fn device_output_channel_count(device_id: u32) -> u32 {
     let Some(out_ptr) = NonNull::new(storage.as_mut_ptr().cast::<c_void>()) else {
         return 0;
     };
+    // SAFETY: `storage` is `u64`-aligned and sized to at least `data_size` bytes.
     let status = unsafe {
         AudioObjectGetPropertyData(
             device_id,
@@ -159,6 +165,8 @@ fn device_output_channel_count(device_id: u32) -> u32 {
         return 0;
     }
 
+    // SAFETY: `storage` is `u64`-aligned (>= `AudioBufferList` alignment) and holds at least
+    // `size_of::<AudioBufferList>()` bytes populated by `AudioObjectGetPropertyData`.
     let abl = unsafe { &*(storage.as_ptr() as *const AudioBufferList) };
     let num_buffers = abl.mNumberBuffers as usize;
     if num_buffers == 0 {
@@ -168,6 +176,8 @@ fn device_output_channel_count(device_id: u32) -> u32 {
     let max_buffers =
         1 + (data_size as usize - size_of::<AudioBufferList>()) / size_of::<AudioBuffer>();
     let count = num_buffers.min(max_buffers);
+    // SAFETY: `count` is bounded by `max_buffers`, so all `count` `AudioBuffer` elements
+    // lie within the `data_size` bytes written into `storage`.
     let buffers = unsafe { std::slice::from_raw_parts(abl.mBuffers.as_ptr(), count) };
     buffers.iter().map(|b| b.mNumberChannels).sum()
 }
@@ -227,6 +237,7 @@ pub fn list_output_devices() -> Vec<OutputDeviceInfo> {
     let address = global_address(kAudioHardwarePropertyDevices);
 
     let mut data_size: u32 = 0;
+    // SAFETY: `address` and `data_size` are valid, aligned, and non-null for the duration of the call.
     let status = unsafe {
         AudioObjectGetPropertyDataSize(
             system_object_id(),
@@ -243,6 +254,7 @@ pub fn list_output_devices() -> Vec<OutputDeviceInfo> {
     let count = data_size as usize / size_of::<AudioObjectID>();
     let mut device_ids = vec![0 as AudioObjectID; count];
     if let Some(out_ptr) = NonNull::new(device_ids.as_mut_ptr().cast::<c_void>()) {
+        // SAFETY: `device_ids` has capacity for `count` `AudioObjectID`s (`data_size` bytes).
         let status = unsafe {
             AudioObjectGetPropertyData(
                 system_object_id(),

@@ -150,15 +150,19 @@ unsafe extern "C-unwind" fn tap_io_proc(
         }
     }
 
-    // SAFETY: Core Audio passes valid `NonNull<AudioBufferList>` pointers for the duration
-    // of the IOProc callback, and `mNumberBuffers` matches the trailing `mBuffers` array.
+    // SAFETY: Core Audio passes a valid `NonNull<AudioBufferList>` for `in_input_data`
+    // for the duration of the IOProc callback.
     let in_list = unsafe { in_input_data.as_ref() };
+    // SAFETY: Core Audio passes a valid, exclusively mutable `NonNull<AudioBufferList>`
+    // for `out_output_data` for the duration of the IOProc callback.
     let out_list = unsafe { out_output_data.as_mut() };
 
     let in_count = in_list.mNumberBuffers as usize;
     let out_count = out_list.mNumberBuffers as usize;
 
+    // SAFETY: `in_list.mNumberBuffers` matches the length of the trailing `mBuffers` array.
     let in_buffers = unsafe { std::slice::from_raw_parts(in_list.mBuffers.as_ptr(), in_count) };
+    // SAFETY: `out_list.mNumberBuffers` matches the length of the trailing `mBuffers` array.
     let out_buffers =
         unsafe { std::slice::from_raw_parts_mut(out_list.mBuffers.as_mut_ptr(), out_count) };
 
@@ -231,17 +235,22 @@ pub fn create_process_tap(
     let proc_refs: Vec<&NSNumber> = proc_nums.iter().map(|n| &**n).collect();
     let procs = NSArray::from_slice(&proc_refs);
 
+    // SAFETY: `CATapDescription::alloc()` returns a freshly allocated instance and `procs`
+    // is a valid `NSArray<NSNumber>` of Core Audio process object IDs.
     let tap_desc = unsafe {
         CATapDescription::initStereoMixdownOfProcesses(CATapDescription::alloc(), &procs)
     };
+    // SAFETY: `tap_desc` is a valid, uniquely owned `CATapDescription` instance.
     unsafe {
         tap_desc.setMuteBehavior(CATapMuteBehavior::Muted);
         tap_desc.setPrivate(true);
     }
 
+    // SAFETY: `tap_desc` is an initialized `CATapDescription` with a non-null `UUID`.
     let tap_uuid = unsafe { tap_desc.UUID().UUIDString() }.to_string();
 
     let mut tap_id: u32 = 0;
+    // SAFETY: `tap_desc` is a valid `CATapDescription` and `tap_id` is a valid out-pointer.
     let status = unsafe { AudioHardwareCreateProcessTap(Some(&tap_desc), &mut tap_id) };
     if status != 0 {
         return Err(TapError::CreateProcessTap(status));
@@ -305,6 +314,7 @@ pub fn create_process_tap(
     );
 
     let mut aggregate_device_id: u32 = 0;
+    // SAFETY: `agg_dict` is a valid `CFDictionary` and `aggregate_device_id` is a valid out-pointer.
     let status = unsafe {
         AudioHardwareCreateAggregateDevice(
             agg_dict.as_opaque(),
@@ -312,6 +322,7 @@ pub fn create_process_tap(
         )
     };
     if status != 0 {
+        // SAFETY: `tap_id` was created by `AudioHardwareCreateProcessTap` and has not been destroyed.
         unsafe {
             let _ = AudioHardwareDestroyProcessTap(tap_id);
         }
@@ -340,6 +351,8 @@ pub fn create_process_tap(
     }));
 
     let mut io_proc_id: AudioDeviceIOProcID = None;
+    // SAFETY: `aggregate_device_id` is a valid aggregate device, `tap_io_proc` matches the
+    // expected C-unwind callback signature, and `ctx_ptr` is a valid `Box::into_raw` pointer.
     let status = unsafe {
         AudioDeviceCreateIOProcID(
             aggregate_device_id,
@@ -349,6 +362,8 @@ pub fn create_process_tap(
         )
     };
     if status != 0 {
+        // SAFETY: IOProc creation failed so `tap_io_proc` is not registered; cleaning up the
+        // aggregate device, process tap, and `ctx_ptr` once is safe.
         unsafe {
             let _ = AudioHardwareDestroyAggregateDevice(aggregate_device_id);
             let _ = AudioHardwareDestroyProcessTap(tap_id);
@@ -357,8 +372,11 @@ pub fn create_process_tap(
         return Err(TapError::CreateIoProcId(status));
     }
 
+    // SAFETY: `aggregate_device_id` and `io_proc_id` are valid and `ctx_ptr` remains alive.
     let status = unsafe { AudioDeviceStart(aggregate_device_id, io_proc_id) };
     if status != 0 {
+        // SAFETY: Destroying the IOProc before freeing `ctx_ptr` ensures `tap_io_proc`
+        // cannot run with a dangling pointer; aggregate device and tap are torn down once.
         unsafe {
             let _ = AudioDeviceDestroyIOProcID(aggregate_device_id, io_proc_id);
             let _ = AudioHardwareDestroyAggregateDevice(aggregate_device_id);

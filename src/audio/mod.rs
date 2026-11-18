@@ -526,14 +526,6 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
         self.taps.clear();
         self.selected_eq_app = None;
     }
-
-    pub fn set_master_volume(&mut self, volume: f32) {
-        let _ = master::set_master_volume(volume);
-    }
-
-    pub fn set_master_mute(&mut self, muted: bool) {
-        let _ = master::set_master_mute(muted);
-    }
 }
 
 #[cfg(test)]
