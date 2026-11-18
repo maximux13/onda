@@ -5,6 +5,7 @@ mod state;
 mod storage;
 mod tray;
 mod ui;
+mod updater;
 
 use audio::AudioEngine;
 use gpui::{
