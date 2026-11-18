@@ -2,12 +2,67 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui::prelude::*;
-use gpui::{App, Bounds, ElementId, MouseButton, Pixels, Window, div, px, relative, rgb, rgba};
+use gpui::{
+    App, Bounds, Div, ElementId, MouseButton, Pixels, Point, Window, div, px, relative, rgb, rgba,
+};
 
 use crate::state::{ThemeMode, WindowStyle};
 use crate::ui::ThemePalette;
 
 type SliderCallback = Rc<dyn Fn(f32, &mut Window, &mut App)>;
+
+/// Normalizes a pointer coordinate along an axis within `[start, start + span]` to `[0.0, 1.0]`.
+fn normalized_axis_ratio(pos: Pixels, start: Pixels, span: Pixels) -> Option<f32> {
+    if span <= px(0.0) {
+        return None;
+    }
+    Some(((pos - start) / span).clamp(0.0, 1.0))
+}
+
+/// Attaches shared track-bounds tracking, mouse-down, and drag-move handlers to a slider container.
+fn bind_drag_handlers(
+    element: Div,
+    on_change: SliderCallback,
+    double_click_value: Option<f32>,
+    value_from_point: impl Fn(Point<Pixels>, Bounds<Pixels>) -> Option<f32> + 'static,
+) -> Div {
+    let track_bounds: Rc<Cell<Bounds<Pixels>>> = Rc::new(Cell::new(Bounds::default()));
+    let bounds_prepaint = Rc::clone(&track_bounds);
+    let bounds_down = Rc::clone(&track_bounds);
+    let bounds_move = Rc::clone(&track_bounds);
+
+    let on_change_down = Rc::clone(&on_change);
+    let on_change_move = on_change;
+
+    let value_from_point = Rc::new(value_from_point);
+    let value_down = Rc::clone(&value_from_point);
+    let value_move = value_from_point;
+
+    element
+        .on_children_prepainted(move |children_bounds, _, _| {
+            if let Some(bounds) = children_bounds.first() {
+                bounds_prepaint.set(*bounds);
+            }
+        })
+        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+            if let Some(reset_val) = double_click_value
+                && event.click_count >= 2
+            {
+                (on_change_down)(reset_val, window, cx);
+                return;
+            }
+            if let Some(val) = (value_down)(event.position, bounds_down.get()) {
+                (on_change_down)(val, window, cx);
+            }
+        })
+        .on_mouse_move(move |event, window, cx| {
+            if event.dragging()
+                && let Some(val) = (value_move)(event.position, bounds_move.get())
+            {
+                (on_change_move)(val, window, cx);
+            }
+        })
+}
 
 /// Glassmorphic horizontal volume slider component for GPUI with per-app dominant accent color
 /// and an always-visible circular white thumb matching the AudioMixer mockup.
@@ -46,11 +101,7 @@ impl VolumeSlider {
     }
 
     fn value_from_x(x: Pixels, bounds: Bounds<Pixels>, max: f32) -> Option<f32> {
-        if bounds.size.width <= px(0.0) {
-            return None;
-        }
-        let ratio = ((x - bounds.left()) / bounds.size.width).clamp(0.0, 1.0);
-        Some(ratio * max)
+        normalized_axis_ratio(x, bounds.left(), bounds.size.width).map(|ratio| ratio * max)
     }
 }
 
@@ -59,14 +110,6 @@ impl RenderOnce for VolumeSlider {
         let palette = ThemePalette::for_theme(self.theme, WindowStyle::Transparent);
         let max = self.max.max(0.01);
         let fraction = (self.value / max).clamp(0.0, 1.0);
-
-        let track_bounds: Rc<Cell<Bounds<Pixels>>> = Rc::new(Cell::new(Bounds::default()));
-        let bounds_prepaint = Rc::clone(&track_bounds);
-        let bounds_down = Rc::clone(&track_bounds);
-        let bounds_move = Rc::clone(&track_bounds);
-
-        let on_change_down = Rc::clone(&self.on_change);
-        let on_change_move = Rc::clone(&self.on_change);
 
         let track_color = if palette.is_dark {
             rgba(0xffffff24)
@@ -136,31 +179,18 @@ impl RenderOnce for VolumeSlider {
 
         let _ = &self.id;
 
-        div()
+        let container = div()
             .h(px(22.0))
             .w_full()
             .px(px(6.0))
             .flex()
             .items_center()
             .cursor_pointer()
-            .on_children_prepainted(move |children_bounds, _, _| {
-                if let Some(bounds) = children_bounds.first() {
-                    bounds_prepaint.set(*bounds);
-                }
-            })
-            .on_mouse_down(MouseButton::Left, move |event, window, cx| {
-                if let Some(val) = Self::value_from_x(event.position.x, bounds_down.get(), max) {
-                    (on_change_down)(val, window, cx);
-                }
-            })
-            .on_mouse_move(move |event, window, cx| {
-                if event.dragging()
-                    && let Some(val) = Self::value_from_x(event.position.x, bounds_move.get(), max)
-                {
-                    (on_change_move)(val, window, cx);
-                }
-            })
-            .child(track)
+            .child(track);
+
+        bind_drag_handlers(container, self.on_change, None, move |pos, bounds| {
+            Self::value_from_x(pos.x, bounds, max)
+        })
     }
 }
 
@@ -193,11 +223,8 @@ impl EqVerticalSlider {
     }
 
     fn gain_from_y(y: Pixels, bounds: Bounds<Pixels>) -> Option<f32> {
-        if bounds.size.height <= px(0.0) {
-            return None;
-        }
-        let ratio = 1.0 - ((y - bounds.top()) / bounds.size.height).clamp(0.0, 1.0);
-        Some((-12.0 + ratio * 24.0).clamp(-12.0, 12.0))
+        normalized_axis_ratio(y, bounds.top(), bounds.size.height)
+            .map(|ratio| (-12.0 + (1.0 - ratio) * 24.0).clamp(-12.0, 12.0))
     }
 }
 
@@ -205,14 +232,6 @@ impl RenderOnce for EqVerticalSlider {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let is_dark = ThemePalette::resolve_is_dark(self.theme);
         let ratio = ((self.gain_db + 12.0) / 24.0).clamp(0.0, 1.0);
-
-        let track_bounds: Rc<Cell<Bounds<Pixels>>> = Rc::new(Cell::new(Bounds::default()));
-        let bounds_prepaint = Rc::clone(&track_bounds);
-        let bounds_down = Rc::clone(&track_bounds);
-        let bounds_move = Rc::clone(&track_bounds);
-
-        let on_change_down = Rc::clone(&self.on_change);
-        let on_change_move = Rc::clone(&self.on_change);
 
         let track_color = if is_dark {
             rgba(0xffffff24)
@@ -267,7 +286,7 @@ impl RenderOnce for EqVerticalSlider {
 
         let _ = &self.id;
 
-        div()
+        let container = div()
             .w(px(28.0))
             .h(px(92.0))
             .py(px(6.0))
@@ -275,27 +294,10 @@ impl RenderOnce for EqVerticalSlider {
             .items_center()
             .justify_center()
             .cursor_pointer()
-            .on_children_prepainted(move |children_bounds, _, _| {
-                if let Some(bounds) = children_bounds.first() {
-                    bounds_prepaint.set(*bounds);
-                }
-            })
-            .on_mouse_down(MouseButton::Left, move |event, window, cx| {
-                if event.click_count >= 2 {
-                    (on_change_down)(0.0, window, cx);
-                    return;
-                }
-                if let Some(db) = Self::gain_from_y(event.position.y, bounds_down.get()) {
-                    (on_change_down)(db, window, cx);
-                }
-            })
-            .on_mouse_move(move |event, window, cx| {
-                if event.dragging()
-                    && let Some(db) = Self::gain_from_y(event.position.y, bounds_move.get())
-                {
-                    (on_change_move)(db, window, cx);
-                }
-            })
-            .child(track)
+            .child(track);
+
+        bind_drag_handlers(container, self.on_change, Some(0.0), |pos, bounds| {
+            Self::gain_from_y(pos.y, bounds)
+        })
     }
 }
