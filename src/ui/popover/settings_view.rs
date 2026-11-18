@@ -3,7 +3,7 @@ use std::sync::Arc;
 use gpui::prelude::*;
 use gpui::{AnyElement, Context, FontWeight, SharedString, div, px, rgb, rgba};
 
-use crate::state::{ThemeMode, WindowStyle};
+use crate::state::{AutoDuckingConfig, ThemeMode, WindowStyle};
 use crate::ui::ThemePalette;
 use crate::ui::icons::{IconName, lucide_svg};
 use crate::ui::slider::VolumeSlider;
@@ -95,6 +95,420 @@ impl TrayPopoverView {
             self.snapshot = engine.snapshot();
         }
         cx.notify();
+    }
+
+    fn update_auto_ducking_config(
+        &mut self,
+        update: impl FnOnce(&mut AutoDuckingConfig),
+        cx: &mut Context<Self>,
+    ) {
+        let mut config = self.snapshot.auto_ducking.clone();
+        update(&mut config);
+        self.snapshot.auto_ducking = config.clone();
+        if let Ok(mut engine) = self.engine.lock() {
+            engine.set_auto_ducking_config(config);
+            self.snapshot = engine.snapshot();
+        }
+        cx.notify();
+    }
+
+    fn toggle_auto_ducking_enabled(&mut self, cx: &mut Context<Self>) {
+        self.update_auto_ducking_config(|cfg| cfg.enabled = !cfg.enabled, cx);
+    }
+
+    fn set_auto_ducking_amount(&mut self, amount: f32, cx: &mut Context<Self>) {
+        self.update_auto_ducking_config(|cfg| cfg.duck_amount = amount, cx);
+    }
+
+    fn set_auto_ducking_release_ms(&mut self, release_ms: u64, cx: &mut Context<Self>) {
+        self.update_auto_ducking_config(|cfg| cfg.release_ms = release_ms, cx);
+    }
+
+    fn toggle_auto_ducking_app(&mut self, bundle_id: &str, is_voice: bool, cx: &mut Context<Self>) {
+        let bid = bundle_id.to_string();
+        self.update_auto_ducking_config(
+            |cfg| {
+                let (primary, secondary) = if is_voice {
+                    (&mut cfg.voice_bundle_ids, &mut cfg.music_bundle_ids)
+                } else {
+                    (&mut cfg.music_bundle_ids, &mut cfg.voice_bundle_ids)
+                };
+                if let Some(pos) = primary.iter().position(|id| id == &bid) {
+                    primary.remove(pos);
+                } else {
+                    primary.push(bid.clone());
+                    secondary.retain(|id| id != &bid);
+                }
+            },
+            cx,
+        );
+    }
+
+    fn render_segmented_option(
+        &self,
+        id: SharedString,
+        label: &'static str,
+        is_selected: bool,
+        palette: ThemePalette,
+        on_click: impl Fn(&mut Self, &gpui::ClickEvent, &mut gpui::Window, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .id(id)
+            .px(px(8.0))
+            .py(px(3.0))
+            .rounded_full()
+            .cursor_pointer()
+            .bg(if is_selected {
+                palette.accent_blue
+            } else {
+                rgba(0x00000000)
+            })
+            .text_xs()
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(if is_selected {
+                rgb(0xffffff)
+            } else {
+                palette.text_secondary
+            })
+            .on_click(cx.listener(on_click))
+            .child(label)
+    }
+
+    fn format_bundle_summary(&self, bundle_ids: &[String]) -> String {
+        if bundle_ids.is_empty() {
+            return String::from("None configured");
+        }
+        bundle_ids
+            .iter()
+            .map(|id| {
+                self.snapshot
+                    .apps
+                    .iter()
+                    .find(|app| app.info.bundle_id == *id)
+                    .map(|app| app.info.name.clone())
+                    .unwrap_or_else(|| id.rsplit('.').next().unwrap_or(id.as_str()).to_string())
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn render_auto_ducking_app_group(
+        &self,
+        title: &'static str,
+        bundle_ids: &[String],
+        is_voice: bool,
+        palette: ThemePalette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let summary = self.format_bundle_summary(bundle_ids);
+        let running_apps: Vec<(String, String, bool)> = self
+            .snapshot
+            .apps
+            .iter()
+            .filter(|row| row.info.is_running_output)
+            .map(|row| {
+                let selected = bundle_ids.iter().any(|id| id == &row.info.bundle_id);
+                (row.info.bundle_id.clone(), row.info.name.clone(), selected)
+            })
+            .collect();
+
+        let mut chips = div().w_full().flex().flex_wrap().gap(px(4.0));
+        if running_apps.is_empty() {
+            chips = chips.child(
+                div()
+                    .text_xs()
+                    .text_color(palette.text_secondary)
+                    .child("No active audio apps running"),
+            );
+        } else {
+            let prefix = if is_voice { "voice" } else { "music" };
+            for (bundle_id, name, selected) in running_apps {
+                let bid_for_click = bundle_id.clone();
+                chips = chips.child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "cfg-duck-{prefix}-{bundle_id}"
+                        )))
+                        .px(px(8.0))
+                        .py(px(3.0))
+                        .rounded_full()
+                        .cursor_pointer()
+                        .bg(if selected {
+                            palette.accent_blue
+                        } else {
+                            palette.pill_bg
+                        })
+                        .hover(move |s| {
+                            if selected {
+                                s.bg(palette.accent_blue)
+                            } else {
+                                s.bg(palette.pill_hover_bg)
+                            }
+                        })
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(if selected {
+                            rgb(0xffffff)
+                        } else {
+                            palette.text_primary
+                        })
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.toggle_auto_ducking_app(&bid_for_click, is_voice, cx);
+                        }))
+                        .child(name),
+                );
+            }
+        }
+
+        div()
+            .w_full()
+            .px(px(12.0))
+            .py(px(8.0))
+            .flex()
+            .flex_col()
+            .gap(px(5.0))
+            .child(
+                div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(palette.text_primary)
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(palette.text_secondary)
+                            .child(format!("{} configured", bundle_ids.len())),
+                    ),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .truncate()
+                    .text_xs()
+                    .text_color(palette.text_secondary)
+                    .child(summary),
+            )
+            .child(chips)
+    }
+
+    fn render_auto_ducking_section(
+        &self,
+        palette: ThemePalette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let duck_cfg = &self.snapshot.auto_ducking;
+        let is_15 = (duck_cfg.duck_amount - 0.15).abs() < 0.02;
+        let is_30 = (duck_cfg.duck_amount - 0.30).abs() < 0.02;
+        let is_50 = (duck_cfg.duck_amount - 0.50).abs() < 0.02;
+
+        let is_500ms = duck_cfg.release_ms == 500;
+        let is_1200ms = duck_cfg.release_ms == 1200;
+        let is_2500ms = duck_cfg.release_ms == 2500;
+
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(5.0))
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(palette.text_primary)
+                    .child("Auto-Ducking"),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .rounded(px(12.0))
+                    .bg(palette.card_bg)
+                    .border_1()
+                    .border_color(palette.card_border)
+                    .flex()
+                    .flex_col()
+                    // Row 1: Enable Auto-Ducking
+                    .child(
+                        div()
+                            .w_full()
+                            .px(px(12.0))
+                            .py(px(8.0))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.0))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(palette.text_primary)
+                                            .child("Enable Auto-Ducking"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(palette.text_secondary)
+                                            .child("Lower music when voice apps speak"),
+                                    ),
+                            )
+                            .child(self.render_ios_toggle(
+                                "cfg-toggle-auto-ducking",
+                                duck_cfg.enabled,
+                                palette,
+                                |this, _event, _window, cx| {
+                                    this.toggle_auto_ducking_enabled(cx);
+                                },
+                                cx,
+                            )),
+                    )
+                    .child(div().w_full().h(px(1.0)).bg(palette.divider))
+                    // Row 2: Ducking target level (15% | 30% | 50%)
+                    .child(
+                        div()
+                            .w_full()
+                            .px(px(12.0))
+                            .py(px(8.0))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(palette.text_primary)
+                                    .child("Duck level"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .p(px(2.0))
+                                    .rounded_full()
+                                    .bg(palette.pill_bg)
+                                    .child(self.render_segmented_option(
+                                        SharedString::from("cfg-duck-amt-15"),
+                                        "15%",
+                                        is_15,
+                                        palette,
+                                        |this, _event, _window, cx| {
+                                            this.set_auto_ducking_amount(0.15, cx);
+                                        },
+                                        cx,
+                                    ))
+                                    .child(self.render_segmented_option(
+                                        SharedString::from("cfg-duck-amt-30"),
+                                        "30%",
+                                        is_30,
+                                        palette,
+                                        |this, _event, _window, cx| {
+                                            this.set_auto_ducking_amount(0.30, cx);
+                                        },
+                                        cx,
+                                    ))
+                                    .child(self.render_segmented_option(
+                                        SharedString::from("cfg-duck-amt-50"),
+                                        "50%",
+                                        is_50,
+                                        palette,
+                                        |this, _event, _window, cx| {
+                                            this.set_auto_ducking_amount(0.50, cx);
+                                        },
+                                        cx,
+                                    )),
+                            ),
+                    )
+                    .child(div().w_full().h(px(1.0)).bg(palette.divider))
+                    // Row 3: Release delay (500 ms | 1.2 s | 2.5 s)
+                    .child(
+                        div()
+                            .w_full()
+                            .px(px(12.0))
+                            .py(px(8.0))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(palette.text_primary)
+                                    .child("Release delay"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .p(px(2.0))
+                                    .rounded_full()
+                                    .bg(palette.pill_bg)
+                                    .child(self.render_segmented_option(
+                                        SharedString::from("cfg-duck-rel-500"),
+                                        "500 ms",
+                                        is_500ms,
+                                        palette,
+                                        |this, _event, _window, cx| {
+                                            this.set_auto_ducking_release_ms(500, cx);
+                                        },
+                                        cx,
+                                    ))
+                                    .child(self.render_segmented_option(
+                                        SharedString::from("cfg-duck-rel-1200"),
+                                        "1.2 s",
+                                        is_1200ms,
+                                        palette,
+                                        |this, _event, _window, cx| {
+                                            this.set_auto_ducking_release_ms(1200, cx);
+                                        },
+                                        cx,
+                                    ))
+                                    .child(self.render_segmented_option(
+                                        SharedString::from("cfg-duck-rel-2500"),
+                                        "2.5 s",
+                                        is_2500ms,
+                                        palette,
+                                        |this, _event, _window, cx| {
+                                            this.set_auto_ducking_release_ms(2500, cx);
+                                        },
+                                        cx,
+                                    )),
+                            ),
+                    )
+                    .child(div().w_full().h(px(1.0)).bg(palette.divider))
+                    // Row 4: Voice apps
+                    .child(self.render_auto_ducking_app_group(
+                        "Voice apps",
+                        &duck_cfg.voice_bundle_ids,
+                        true,
+                        palette,
+                        cx,
+                    ))
+                    .child(div().w_full().h(px(1.0)).bg(palette.divider))
+                    // Row 5: Music apps
+                    .child(self.render_auto_ducking_app_group(
+                        "Music apps",
+                        &duck_cfg.music_bundle_ids,
+                        false,
+                        palette,
+                        cx,
+                    )),
+            )
     }
 
     /// Renders a single sidebar tab button in the `Settings` view.
@@ -589,6 +1003,8 @@ impl TrayPopoverView {
                             ),
                     ),
             )
+            // Section 4: Auto-Ducking
+            .child(self.render_auto_ducking_section(palette, cx))
             // Bottom Info Card: Onda v0.1.0
             .child(
                 div()

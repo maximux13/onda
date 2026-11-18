@@ -343,20 +343,52 @@ impl TrayPopoverView {
             (IconName::VOLUME_2, palette.text_primary)
         };
 
-        let mut name_col = div()
-            .w(px(130.0))
-            .flex_shrink_0()
+        let show_ducked = row.info.is_running_output && row.is_ducked;
+        let mut name_row = div()
+            .w_full()
+            .min_w_0()
             .flex()
-            .flex_col()
-            .justify_center()
+            .items_center()
+            .gap(px(5.0))
             .child(
                 div()
+                    .flex_1()
+                    .min_w_0()
                     .truncate()
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(palette.text_primary)
                     .child(row.info.name.clone()),
             );
+
+        if show_ducked {
+            let mut duck_bg = palette.accent_blue;
+            duck_bg.a = 0.16;
+            let mut duck_border = palette.accent_blue;
+            duck_border.a = 0.35;
+            name_row = name_row.child(
+                div()
+                    .flex_shrink_0()
+                    .px(px(5.0))
+                    .py(px(1.0))
+                    .rounded_full()
+                    .bg(duck_bg)
+                    .border_1()
+                    .border_color(duck_border)
+                    .text_size(px(9.5))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(palette.accent_blue)
+                    .child("Ducked"),
+            );
+        }
+
+        let mut name_col = div()
+            .w(px(130.0))
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .justify_center()
+            .child(name_row);
 
         let boost_enabled = row.config.boost_enabled;
 
