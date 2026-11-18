@@ -371,6 +371,8 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
             restore_on_close: self.prefs.restore_on_close,
             show_in_menu_bar: self.prefs.show_in_menu_bar,
             show_all_apps: self.prefs.show_all_apps,
+            advanced_mode: self.prefs.advanced_mode,
+            eq_collapsed: self.prefs.eq_collapsed,
             global_eq_enabled: self.prefs.global_eq_enabled,
             global_eq_gains: self.prefs.global_eq_gains,
             selected_eq_app: self.selected_eq_app.clone(),
@@ -504,6 +506,18 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
     /// Toggles whether inactive open applications are included in the mixer list.
     pub fn set_show_all_apps(&mut self, show: bool) {
         self.prefs.show_all_apps = show;
+        self.save_prefs();
+    }
+
+    /// Sets whether Advanced Mode is enabled and persists preferences.
+    pub fn set_advanced_mode(&mut self, enabled: bool) {
+        self.prefs.advanced_mode = enabled;
+        self.save_prefs();
+    }
+
+    /// Sets whether the inline Equalizer section is collapsed and persists preferences.
+    pub fn set_eq_collapsed(&mut self, collapsed: bool) {
+        self.prefs.eq_collapsed = collapsed;
         self.save_prefs();
     }
 

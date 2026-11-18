@@ -22,6 +22,7 @@ use crate::ui::ThemePalette;
 
 pub(crate) const POPOVER_WIDTH: f64 = 460.0;
 pub(crate) const POPOVER_HEIGHT: f64 = 560.0;
+pub(crate) const POPOVER_ADVANCED_HEIGHT: f64 = 700.0;
 
 fn main() {
     Application::new()
@@ -82,13 +83,18 @@ fn main() {
                                         });
                                     }
                                 } else {
-                                    let (initial_style, initial_theme) = engine
+                                    let (initial_style, initial_theme, initial_advanced) = engine
                                         .lock()
                                         .map(|mut e| {
                                             let snap = e.snapshot();
-                                            (snap.window_style, snap.theme)
+                                            (snap.window_style, snap.theme, snap.advanced_mode)
                                         })
                                         .unwrap_or_default();
+                                    let initial_height = if initial_advanced {
+                                        POPOVER_ADVANCED_HEIGHT
+                                    } else {
+                                        POPOVER_HEIGHT
+                                    };
                                     let is_transparent = initial_style == WindowStyle::Transparent;
                                     let is_dark = ThemePalette::resolve_is_dark(initial_theme);
 
@@ -98,7 +104,7 @@ fn main() {
                                         let placement = platform::compute_popover_placement(
                                             cx,
                                             POPOVER_WIDTH,
-                                            POPOVER_HEIGHT,
+                                            initial_height,
                                         );
 
                                         let options = WindowOptions {
@@ -153,13 +159,13 @@ fn main() {
                                             );
                                         platform::configure_popover_glass(
                                             POPOVER_WIDTH,
-                                            POPOVER_HEIGHT,
+                                            initial_height,
                                             is_transparent,
                                             is_dark,
                                         );
                                         platform::set_popover_window_state(
                                             POPOVER_WIDTH,
-                                            POPOVER_HEIGHT,
+                                            initial_height,
                                             placement.ns_x,
                                             start_y,
                                             start_alpha,
@@ -186,7 +192,7 @@ fn main() {
                                                     let _ = cx.update(|_| {
                                                         platform::set_popover_window_state(
                                                             POPOVER_WIDTH,
-                                                            POPOVER_HEIGHT,
+                                                            initial_height,
                                                             ns_x,
                                                             y,
                                                             alpha,

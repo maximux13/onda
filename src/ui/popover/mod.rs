@@ -43,6 +43,7 @@ pub struct TrayPopoverView {
     pub(super) settings_tab: SettingsTab,
     pub(super) is_pinned: bool,
     pub(super) advanced_mode: bool,
+    pub(super) eq_collapsed: bool,
     pub(super) show_output_picker: bool,
     pub(super) launch_at_login: bool,
     pub(super) view_transition_id: u64,
@@ -70,6 +71,7 @@ impl TrayPopoverView {
             settings_tab: SettingsTab::General,
             is_pinned: false,
             advanced_mode: false,
+            eq_collapsed: false,
             show_output_picker: false,
             launch_at_login: crate::launch_agent::is_launch_at_login_enabled(),
             view_transition_id: 0,
@@ -77,6 +79,8 @@ impl TrayPopoverView {
             last_is_dark: None,
         };
         view.refresh(cx);
+        view.advanced_mode = view.snapshot.advanced_mode;
+        view.eq_collapsed = view.snapshot.eq_collapsed;
 
         cx.spawn(async move |this, cx| {
             loop {
@@ -96,6 +100,15 @@ impl TrayPopoverView {
     /// Returns whether the popover is pinned by the user (preventing auto-close on blur).
     pub fn is_pinned(&self) -> bool {
         self.is_pinned
+    }
+
+    /// Returns the target popover height for the current mode.
+    pub(super) fn current_popover_height(&self) -> f64 {
+        if self.advanced_mode {
+            crate::POPOVER_ADVANCED_HEIGHT
+        } else {
+            crate::POPOVER_HEIGHT
+        }
     }
 
     /// Returns a snapshot of the current auto-updater state.
@@ -417,7 +430,7 @@ impl Render for TrayPopoverView {
             });
             crate::platform::configure_popover_glass(
                 crate::POPOVER_WIDTH,
-                crate::POPOVER_HEIGHT,
+                self.current_popover_height(),
                 is_transparent,
                 palette.is_dark,
             );

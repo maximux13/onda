@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{Context, FontWeight, div, px, rgb};
+use gpui::{Context, FontWeight, div, px, rgb, rgba};
 
 use crate::ui::ThemePalette;
 use crate::ui::icons::{IconName, lucide_svg};
@@ -119,28 +119,52 @@ impl TrayPopoverView {
             )
     }
 
-    /// Renders an inline output device & master volume drawer when the user clicks `Output: ...`.
-    fn render_output_picker_drawer(
+    /// Renders a floating output device & master volume popover above the footer `Output: ...` button.
+    fn render_output_picker_popover(
         &self,
         palette: ThemePalette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let mut drawer = div()
+        let surface_bg = if palette.is_dark {
+            rgba(0x1b2236f5)
+        } else {
+            rgba(0xf7f9fdf7)
+        };
+
+        let mut devices_list = div()
+            .id("output-picker-devices-scroll")
+            .w_full()
+            .max_h(px(260.0))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap(px(6.0));
+
+        for device in &self.snapshot.devices {
+            devices_list = devices_list.child(self.render_device_row(device, palette, cx));
+        }
+
+        div()
+            .id("output-picker-popover")
             .w_full()
             .p(px(10.0))
             .rounded(px(12.0))
-            .bg(palette.card_bg)
+            .bg(surface_bg)
             .border_1()
-            .border_color(palette.card_border)
+            .border_color(palette.panel_border)
+            .shadow_lg()
             .flex()
             .flex_col()
             .gap(px(6.0))
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(|_, _, cx| cx.stop_propagation())
             .child(
                 div()
                     .w_full()
                     .flex()
                     .items_center()
                     .justify_between()
+                    .px(px(2.0))
                     .child(
                         div()
                             .text_xs()
@@ -148,13 +172,8 @@ impl TrayPopoverView {
                             .text_color(palette.text_secondary)
                             .child("Output Devices & Master Volume"),
                     ),
-            );
-
-        for device in &self.snapshot.devices {
-            drawer = drawer.child(self.render_device_row(device, palette, cx));
-        }
-
-        drawer
+            )
+            .child(devices_list)
     }
 
     /// Renders the bottom footer bar matching the `Onda` mockup.
@@ -273,7 +292,26 @@ impl TrayPopoverView {
                     .items_center()
                     .gap(px(6.0))
                     .on_click(cx.listener(|this, _event, _window, cx| {
+                        let old_height = this.current_popover_height();
                         this.advanced_mode = !this.advanced_mode;
+                        if let Ok(mut engine) = this.engine.lock() {
+                            engine.set_advanced_mode(this.advanced_mode);
+                        }
+                        let new_height = this.current_popover_height();
+                        if (old_height - new_height).abs() > 0.5 {
+                            cx.spawn(async move |_, cx| {
+                                cx.background_executor()
+                                    .timer(std::time::Duration::from_millis(1))
+                                    .await;
+                                crate::platform::resize_popover_window(
+                                    crate::POPOVER_WIDTH,
+                                    old_height,
+                                    crate::POPOVER_WIDTH,
+                                    new_height,
+                                );
+                            })
+                            .detach();
+                        }
                         cx.notify();
                     }))
                     .child(lucide_svg(IconName::SPARKLES, 14.0, sparkles_color))
@@ -380,7 +418,7 @@ impl TrayPopoverView {
             }
         }
 
-        let mut scroll_area = div()
+        let scroll_area = div()
             .id("mixer-apps-scroll")
             .flex_1()
             .min_h_0()
@@ -390,11 +428,8 @@ impl TrayPopoverView {
             .gap(px(6.0))
             .child(apps_list);
 
-        if self.show_output_picker {
-            scroll_area = scroll_area.child(self.render_output_picker_drawer(palette, cx));
-        }
-
         let mut root = div()
+            .relative()
             .w_full()
             .h_full()
             .flex()
@@ -411,6 +446,34 @@ impl TrayPopoverView {
                 .child(self.render_equalizer_section(palette, cx));
         }
 
-        root.child(self.render_mixer_footer(palette, cx))
+        root = root.child(self.render_mixer_footer(palette, cx));
+
+        if self.show_output_picker {
+            root = root
+                .child(
+                    div()
+                        .id("output-picker-backdrop")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .bottom(px(46.0))
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            this.show_output_picker = false;
+                            cx.notify();
+                            cx.stop_propagation();
+                        })),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .bottom(px(48.0))
+                        .left(px(0.0))
+                        .right(px(0.0))
+                        .child(self.render_output_picker_popover(palette, cx)),
+                );
+        }
+
+        root
     }
 }

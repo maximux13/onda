@@ -5,7 +5,7 @@ use objc2_app_kit::{
     NSApplication, NSEvent, NSScreen, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
     NSVisualEffectState, NSVisualEffectView, NSWindow,
 };
-use objc2_foundation::{NSPoint, NSUserDefaults, ns_string};
+use objc2_foundation::{NSPoint, NSSize, NSUserDefaults, ns_string};
 
 const EDGE_MARGIN: f64 = 8.0;
 const MENU_BAR_GAP: f64 = 6.0;
@@ -220,6 +220,18 @@ pub fn configure_popover_glass(width: f64, height: f64, is_transparent: bool, is
                 }
             }
         }
+    });
+}
+
+/// Resizes any open popover `NSWindow` matching `(old_width, old_height)` to
+/// `(new_width, new_height)` while keeping its top edge anchored below the menu bar.
+pub fn resize_popover_window(old_width: f64, old_height: f64, new_width: f64, new_height: f64) {
+    with_popover_window(old_width, old_height, |win| {
+        let mut frame = win.frame();
+        let top = frame.origin.y + frame.size.height;
+        frame.size = NSSize::new(new_width, new_height);
+        frame.origin.y = top - new_height;
+        win.setFrame_display(frame, true);
     });
 }
 

@@ -148,23 +148,48 @@ impl TrayPopoverView {
             );
         }
 
-        let mut header_left = div()
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .min_w_0()
-            .child(lucide_svg(
-                IconName::AUDIO_LINES,
-                16.0,
-                palette.text_primary,
-            ))
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(palette.text_primary)
-                    .child("Equalizer"),
-            );
+        let mut header_left = div().flex().items_center().gap(px(8.0)).min_w_0().child(
+            div()
+                .id("eq-collapse-toggle")
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.eq_collapsed = !this.eq_collapsed;
+                    if let Ok(mut engine) = this.engine.lock() {
+                        engine.set_eq_collapsed(this.eq_collapsed);
+                    }
+                    cx.notify();
+                }))
+                .child(lucide_svg(
+                    IconName::AUDIO_LINES,
+                    16.0,
+                    palette.text_primary,
+                ))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(palette.text_primary)
+                        .child("Equalizer"),
+                )
+                .child(
+                    div()
+                        .px(px(6.0))
+                        .py(px(2.0))
+                        .rounded_full()
+                        .bg(palette.pill_bg)
+                        .hover(move |s| s.bg(palette.pill_hover_bg))
+                        .flex()
+                        .items_center()
+                        .gap(px(3.0))
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(palette.text_secondary)
+                        .child(if self.eq_collapsed { "Show" } else { "Hide" }),
+                ),
+        );
 
         if is_app_target {
             header_left = header_left.child(
@@ -216,7 +241,7 @@ impl TrayPopoverView {
             );
         }
 
-        div()
+        let mut section = div()
             .w_full()
             .flex()
             .flex_col()
@@ -239,7 +264,12 @@ impl TrayPopoverView {
                         },
                         cx,
                     )),
-            )
-            .child(sliders_row)
+            );
+
+        if !self.eq_collapsed {
+            section = section.child(sliders_row);
+        }
+
+        section
     }
 }

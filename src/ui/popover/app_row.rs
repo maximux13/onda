@@ -332,10 +332,10 @@ impl TrayPopoverView {
         let bundle_for_mute = Arc::clone(&bundle_id);
         let bundle_for_boost = Arc::clone(&bundle_id);
         let bundle_for_select = Arc::clone(&bundle_id);
-        let bundle_for_route = Arc::clone(&bundle_id);
 
         let is_eq_selected = self.snapshot.selected_eq_app.as_deref() == Some(bundle_id.as_ref());
-        let is_expanded = self.expanded_routing_app.as_deref() == Some(bundle_id.as_ref());
+        let is_expanded =
+            is_eq_selected || self.expanded_routing_app.as_deref() == Some(bundle_id.as_ref());
 
         let (speaker_icon, speaker_color) = if row.config.muted {
             (IconName::VOLUME_X, palette.mute_red)
@@ -368,7 +368,6 @@ impl TrayPopoverView {
             };
             name_col = name_col.child(
                 div()
-                    .id(SharedString::from(format!("app-route-sub-{bundle_id}")))
                     .truncate()
                     .text_xs()
                     .text_color(if row.config.target_device_uid.is_some() {
@@ -376,11 +375,6 @@ impl TrayPopoverView {
                     } else {
                         palette.text_secondary
                     })
-                    .hover(move |s| s.text_color(palette.accent_blue))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.toggle_routing_picker(&bundle_for_route, cx);
-                    }))
                     .child(route_label),
             );
         } else if !row.info.is_running_output {
@@ -408,6 +402,9 @@ impl TrayPopoverView {
                 } else {
                     Some(bundle_for_select.to_string())
                 };
+                if this.advanced_mode {
+                    this.expanded_routing_app = next.clone();
+                }
                 this.select_eq_app(next, cx);
             }));
 

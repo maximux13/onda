@@ -147,6 +147,8 @@ pub struct MixerSnapshot {
     pub restore_on_close: bool,
     pub show_in_menu_bar: bool,
     pub show_all_apps: bool,
+    pub advanced_mode: bool,
+    pub eq_collapsed: bool,
     pub global_eq_enabled: bool,
     pub global_eq_gains: [f32; 10],
     /// Selected app `bundle_id` for the equalizer (`None` = Global Equalizer).
@@ -167,6 +169,8 @@ impl Default for MixerSnapshot {
             restore_on_close: false,
             show_in_menu_bar: true,
             show_all_apps: false,
+            advanced_mode: false,
+            eq_collapsed: false,
             global_eq_enabled: true,
             global_eq_gains: [0.0; 10],
             selected_eq_app: None,
@@ -191,6 +195,10 @@ pub struct Preferences {
     pub show_in_menu_bar: bool,
     #[serde(default)]
     pub show_all_apps: bool,
+    #[serde(default)]
+    pub advanced_mode: bool,
+    #[serde(default)]
+    pub eq_collapsed: bool,
     #[serde(default = "default_true")]
     pub global_eq_enabled: bool,
     #[serde(default = "default_eq_gains")]
@@ -209,6 +217,8 @@ impl Default for Preferences {
             restore_on_close: false,
             show_in_menu_bar: true,
             show_all_apps: false,
+            advanced_mode: false,
+            eq_collapsed: false,
             global_eq_enabled: true,
             global_eq_gains: [0.0; 10],
             apps: HashMap::new(),
