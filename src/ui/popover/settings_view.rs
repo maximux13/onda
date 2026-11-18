@@ -3,7 +3,9 @@ use std::sync::Arc;
 use gpui::prelude::*;
 use gpui::{AnyElement, Context, FontWeight, SharedString, div, px, rgb, rgba};
 
-use crate::state::{AutoDuckingConfig, ThemeMode, WindowStyle};
+use crate::state::{
+    AutoDuckingConfig, ShortcutAction, ShortcutBinding, ShortcutsConfig, ThemeMode, WindowStyle,
+};
 use crate::ui::ThemePalette;
 use crate::ui::icons::{IconName, lucide_svg};
 use crate::ui::slider::VolumeSlider;
@@ -110,6 +112,68 @@ impl TrayPopoverView {
             self.snapshot = engine.snapshot();
         }
         cx.notify();
+    }
+
+    fn shortcut_binding(config: &ShortcutsConfig, action: ShortcutAction) -> &ShortcutBinding {
+        match action {
+            ShortcutAction::TogglePopover => &config.toggle_popover,
+            ShortcutAction::MuteActiveApp => &config.mute_active_app,
+            ShortcutAction::CycleOutputDevice => &config.cycle_output_device,
+        }
+    }
+
+    fn shortcut_binding_mut(
+        config: &mut ShortcutsConfig,
+        action: ShortcutAction,
+    ) -> &mut ShortcutBinding {
+        match action {
+            ShortcutAction::TogglePopover => &mut config.toggle_popover,
+            ShortcutAction::MuteActiveApp => &mut config.mute_active_app,
+            ShortcutAction::CycleOutputDevice => &mut config.cycle_output_device,
+        }
+    }
+
+    fn update_shortcuts_config(
+        &mut self,
+        update: impl FnOnce(&mut ShortcutsConfig),
+        cx: &mut Context<Self>,
+    ) {
+        let mut config = self.snapshot.shortcuts.clone();
+        update(&mut config);
+        self.snapshot.shortcuts = config.clone();
+        if let Ok(mut engine) = self.engine.lock() {
+            engine.set_shortcuts_config(config.clone());
+            self.snapshot = engine.snapshot();
+        }
+        if let Ok(mut hotkeys) = self.hotkeys.lock() {
+            hotkeys.apply_config(&config);
+        }
+        cx.notify();
+    }
+
+    fn toggle_shortcut_enabled(&mut self, action: ShortcutAction, cx: &mut Context<Self>) {
+        self.update_shortcuts_config(
+            |cfg| {
+                let binding = Self::shortcut_binding_mut(cfg, action);
+                binding.enabled = !binding.enabled;
+            },
+            cx,
+        );
+    }
+
+    fn set_shortcut_accelerator(
+        &mut self,
+        action: ShortcutAction,
+        accelerator: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        self.update_shortcuts_config(
+            |cfg| {
+                let binding = Self::shortcut_binding_mut(cfg, action);
+                binding.accelerator = accelerator.to_string();
+            },
+            cx,
+        );
     }
 
     fn toggle_auto_ducking_enabled(&mut self, cx: &mut Context<Self>) {
@@ -1076,7 +1140,112 @@ impl TrayPopoverView {
             )
     }
 
-    fn render_settings_shortcuts_tab(&self, palette: ThemePalette) -> impl IntoElement {
+    fn render_settings_shortcuts_tab(
+        &self,
+        palette: ThemePalette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        struct GlobalShortcutSpec {
+            action: ShortcutAction,
+            id_prefix: &'static str,
+            label: &'static str,
+            presets: [(&'static str, &'static str); 2],
+        }
+
+        let global_specs = [
+            GlobalShortcutSpec {
+                action: ShortcutAction::TogglePopover,
+                id_prefix: "toggle-popover",
+                label: "Toggle popover",
+                presets: [("⌘⇧O", "CmdOrCtrl+Shift+O"), ("⌥⇧O", "Alt+Shift+O")],
+            },
+            GlobalShortcutSpec {
+                action: ShortcutAction::MuteActiveApp,
+                id_prefix: "mute-active",
+                label: "Mute active app",
+                presets: [("⌘⇧M", "CmdOrCtrl+Shift+M"), ("⌥⇧M", "Alt+Shift+M")],
+            },
+            GlobalShortcutSpec {
+                action: ShortcutAction::CycleOutputDevice,
+                id_prefix: "cycle-output",
+                label: "Cycle output device",
+                presets: [("⌘⇧D", "CmdOrCtrl+Shift+D"), ("⌥⇧D", "Alt+Shift+D")],
+            },
+        ];
+
+        let mut global_card = div()
+            .w_full()
+            .rounded(px(12.0))
+            .bg(palette.card_bg)
+            .border_1()
+            .border_color(palette.card_border)
+            .flex()
+            .flex_col();
+
+        for (idx, spec) in global_specs.iter().enumerate() {
+            if idx > 0 {
+                global_card = global_card.child(div().w_full().h(px(1.0)).bg(palette.divider));
+            }
+            let binding = Self::shortcut_binding(&self.snapshot.shortcuts, spec.action);
+            let action = spec.action;
+
+            let mut pills = div()
+                .flex()
+                .items_center()
+                .p(px(2.0))
+                .rounded_full()
+                .bg(palette.pill_bg);
+
+            for (pill_idx, (display, accel)) in spec.presets.iter().enumerate() {
+                let is_selected = binding.accelerator == *accel;
+                let accel_value = *accel;
+                pills = pills.child(self.render_segmented_option(
+                    SharedString::from(format!("cfg-hotkey-{}-p{}", spec.id_prefix, pill_idx)),
+                    display,
+                    is_selected,
+                    palette,
+                    move |this, _event, _window, cx| {
+                        this.set_shortcut_accelerator(action, accel_value, cx);
+                    },
+                    cx,
+                ));
+            }
+
+            global_card = global_card.child(
+                div()
+                    .w_full()
+                    .px(px(12.0))
+                    .py(px(8.0))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(palette.text_primary)
+                            .child(spec.label),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(pills)
+                            .child(self.render_ios_toggle(
+                                SharedString::from(format!("cfg-hotkey-{}-toggle", spec.id_prefix)),
+                                binding.enabled,
+                                palette,
+                                move |this, _event, _window, cx| {
+                                    this.toggle_shortcut_enabled(action, cx);
+                                },
+                                cx,
+                            )),
+                    ),
+            );
+        }
+
         let shortcuts = [
             ("Close mixer popover", "Esc"),
             ("Reset EQ band to 0 dB", "Double-click"),
@@ -1131,15 +1300,37 @@ impl TrayPopoverView {
             .w_full()
             .flex()
             .flex_col()
-            .gap(px(6.0))
+            .gap(px(12.0))
             .child(
                 div()
-                    .text_xs()
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(palette.text_primary)
-                    .child("Keyboard Shortcuts & Quick Actions"),
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(palette.text_primary)
+                            .child("Global Shortcuts"),
+                    )
+                    .child(global_card),
             )
-            .child(card)
+            .child(
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(palette.text_primary)
+                            .child("Keyboard Shortcuts & Quick Actions"),
+                    )
+                    .child(card),
+            )
     }
 
     fn render_settings_eq_tab(
@@ -1475,7 +1666,7 @@ impl TrayPopoverView {
                 .render_settings_general_tab(palette, cx)
                 .into_any_element(),
             SettingsTab::Shortcuts => self
-                .render_settings_shortcuts_tab(palette)
+                .render_settings_shortcuts_tab(palette, cx)
                 .into_any_element(),
             SettingsTab::Equalizer => self.render_settings_eq_tab(palette, cx).into_any_element(),
             SettingsTab::Notifications => self
