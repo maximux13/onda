@@ -159,6 +159,63 @@ impl Default for AutoDuckingConfig {
     }
 }
 
+/// Global keyboard shortcut actions supported by Onda.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ShortcutAction {
+    TogglePopover,
+    MuteActiveApp,
+    CycleOutputDevice,
+}
+
+/// Persisted configuration for a single global keyboard shortcut.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShortcutBinding {
+    pub enabled: bool,
+    pub accelerator: String,
+}
+
+/// Global keyboard shortcut bindings for quick actions.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShortcutsConfig {
+    #[serde(default = "default_toggle_popover_binding")]
+    pub toggle_popover: ShortcutBinding,
+    #[serde(default = "default_mute_active_app_binding")]
+    pub mute_active_app: ShortcutBinding,
+    #[serde(default = "default_cycle_output_device_binding")]
+    pub cycle_output_device: ShortcutBinding,
+}
+
+fn default_toggle_popover_binding() -> ShortcutBinding {
+    ShortcutBinding {
+        enabled: false,
+        accelerator: String::from("CmdOrCtrl+Shift+O"),
+    }
+}
+
+fn default_mute_active_app_binding() -> ShortcutBinding {
+    ShortcutBinding {
+        enabled: false,
+        accelerator: String::from("CmdOrCtrl+Shift+M"),
+    }
+}
+
+fn default_cycle_output_device_binding() -> ShortcutBinding {
+    ShortcutBinding {
+        enabled: false,
+        accelerator: String::from("CmdOrCtrl+Shift+D"),
+    }
+}
+
+impl Default for ShortcutsConfig {
+    fn default() -> Self {
+        Self {
+            toggle_popover: default_toggle_popover_binding(),
+            mute_active_app: default_mute_active_app_binding(),
+            cycle_output_device: default_cycle_output_device_binding(),
+        }
+    }
+}
+
 /// Legacy single-master struct kept for compatibility.
 #[derive(Clone, Debug, Default)]
 pub struct MasterState {
@@ -206,6 +263,7 @@ pub struct MixerSnapshot {
     /// Whether auto-ducking is currently attenuating music apps.
     pub ducking_active: bool,
     pub auto_ducking: AutoDuckingConfig,
+    pub shortcuts: ShortcutsConfig,
 }
 
 impl Default for MixerSnapshot {
@@ -230,6 +288,7 @@ impl Default for MixerSnapshot {
             selected_eq_app: None,
             ducking_active: false,
             auto_ducking: AutoDuckingConfig::default(),
+            shortcuts: ShortcutsConfig::default(),
         }
     }
 }
@@ -263,6 +322,8 @@ pub struct Preferences {
     pub apps: HashMap<String, AppVolumeConfig>,
     #[serde(default)]
     pub auto_ducking: AutoDuckingConfig,
+    #[serde(default)]
+    pub shortcuts: ShortcutsConfig,
 }
 
 impl Default for Preferences {
@@ -281,6 +342,7 @@ impl Default for Preferences {
             global_eq_gains: [0.0; 10],
             apps: HashMap::new(),
             auto_ducking: AutoDuckingConfig::default(),
+            shortcuts: ShortcutsConfig::default(),
         }
     }
 }
@@ -366,6 +428,21 @@ mod tests {
                 .music_bundle_ids
                 .iter()
                 .any(|id| id == "com.spotify.client")
+        );
+    }
+
+    #[test]
+    fn test_preferences_without_shortcuts_deserializes_with_defaults() {
+        let legacy_json = r#"{"theme":"Light"}"#;
+        let prefs: Preferences = serde_json::from_str(legacy_json).expect("deserialize legacy");
+        assert!(!prefs.shortcuts.toggle_popover.enabled);
+        assert_eq!(prefs.shortcuts.toggle_popover.accelerator, "CmdOrCtrl+Shift+O");
+        assert!(!prefs.shortcuts.mute_active_app.enabled);
+        assert_eq!(prefs.shortcuts.mute_active_app.accelerator, "CmdOrCtrl+Shift+M");
+        assert!(!prefs.shortcuts.cycle_output_device.enabled);
+        assert_eq!(
+            prefs.shortcuts.cycle_output_device.accelerator,
+            "CmdOrCtrl+Shift+D"
         );
     }
 }

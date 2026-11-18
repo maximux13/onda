@@ -12,7 +12,7 @@ use std::time::Instant;
 
 use crate::state::{
     AppRowState, AppVolumeConfig, AudioAppInfo, AutoDuckingConfig, DeviceIconKind, InputDeviceInfo,
-    MixerSnapshot, OutputDeviceInfo, Preferences, ThemeMode, WindowStyle,
+    MixerSnapshot, OutputDeviceInfo, Preferences, ShortcutsConfig, ThemeMode, WindowStyle,
 };
 use crate::storage::{JsonFileStore, PreferencesStore};
 use tap::AppTapHandle;
@@ -496,6 +496,7 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
             selected_eq_app: self.selected_eq_app.clone(),
             ducking_active,
             auto_ducking: self.prefs.auto_ducking.clone(),
+            shortcuts: self.prefs.shortcuts.clone(),
         }
     }
 
@@ -697,6 +698,42 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
         self.refresh_all_taps();
     }
 
+    /// Updates global keyboard shortcuts configuration and persists preferences.
+    pub fn set_shortcuts_config(&mut self, config: ShortcutsConfig) {
+        self.prefs.shortcuts = config;
+        self.save_prefs();
+    }
+
+    /// Toggles mute on the frontmost running audio app, or falls back to the first running output app.
+    /// Returns the toggled application's display name, if any.
+    pub fn toggle_mute_active_app(&mut self, frontmost_bundle_id: Option<&str>) -> Option<String> {
+        let processes = self.backend.list_audio_processes(false);
+        let target = frontmost_bundle_id
+            .and_then(|bid| {
+                processes
+                    .iter()
+                    .find(|p| p.is_running_output && p.bundle_id == bid)
+            })
+            .or_else(|| processes.iter().find(|p| p.is_running_output))?;
+
+        let currently_muted = self.configs.get(&target.bundle_id).is_some_and(|c| c.muted);
+        self.set_app_mute(&target.bundle_id, !currently_muted);
+        Some(target.name.clone())
+    }
+
+    /// Cycles the default macOS output device to the next available output device.
+    /// Returns the newly selected device's display name, if any.
+    pub fn cycle_default_output_device(&mut self) -> Option<String> {
+        let devices = self.backend.list_output_devices();
+        if devices.is_empty() {
+            return None;
+        }
+        let current_idx = devices.iter().position(|d| d.is_default).unwrap_or(0);
+        let next = &devices[(current_idx + 1) % devices.len()];
+        self.backend.set_default_output_device(next.id);
+        Some(next.name.clone())
+    }
+
     pub fn reset_saved_app_configs(&mut self) {
         self.configs.clear();
         self.prefs.apps.clear();
@@ -797,6 +834,7 @@ mod tests {
         last_input_volume: Rc<RefCell<Option<(u32, f32)>>>,
         last_input_mute: Rc<RefCell<Option<(u32, bool)>>>,
         last_default_input: Rc<RefCell<Option<u32>>>,
+        last_default_output: Rc<RefCell<Option<u32>>>,
     }
 
     impl FakeBackend {
@@ -832,6 +870,10 @@ mod tests {
         fn last_default_input(&self) -> Option<u32> {
             *self.last_default_input.borrow()
         }
+
+        fn last_default_output(&self) -> Option<u32> {
+            *self.last_default_output.borrow()
+        }
     }
 
     impl AudioBackend for FakeBackend {
@@ -861,7 +903,9 @@ mod tests {
             "No Output".to_string()
         }
 
-        fn set_default_output_device(&self, _device_id: u32) {}
+        fn set_default_output_device(&self, device_id: u32) {
+            *self.last_default_output.borrow_mut() = Some(device_id);
+        }
         fn set_device_volume(&self, _device_id: u32, _volume: f32) {}
         fn set_device_mute(&self, _device_id: u32, _muted: bool) {}
 
@@ -1263,5 +1307,51 @@ mod tests {
         let snap2 = engine.snapshot();
         assert!(!snap2.ducking_active);
         assert!(!snap2.apps[0].is_ducked);
+    }
+
+    #[test]
+    fn cycle_default_output_device_rotates_through_devices() {
+        let backend = FakeBackend::with_devices_and_processes(
+            vec![
+                make_device(1, "uid-1", "Speakers", true),
+                make_device(2, "uid-2", "AirPods", false),
+            ],
+            vec![],
+        );
+        let mut engine = AudioEngine::with_backend_and_store(backend, MemoryStore::default());
+        let next = engine.cycle_default_output_device();
+        assert_eq!(next.as_deref(), Some("AirPods"));
+        assert_eq!(engine.backend.last_default_output(), Some(2));
+    }
+
+    #[test]
+    fn toggle_mute_active_app_prefers_frontmost_and_falls_back_to_first_running() {
+        let backend = FakeBackend::with_devices_and_processes(
+            vec![make_device(1, "uid-1", "Speakers", true)],
+            vec![
+                make_app("com.spotify.client", "Spotify", vec![10]),
+                make_app("com.apple.Safari", "Safari", vec![20]),
+            ],
+        );
+        let mut engine = AudioEngine::with_backend_and_store(backend, MemoryStore::default());
+
+        // Frontmost matches Safari -> toggles Safari mute on, then off.
+        assert_eq!(
+            engine
+                .toggle_mute_active_app(Some("com.apple.Safari"))
+                .as_deref(),
+            Some("Safari")
+        );
+        assert!(engine.configs["com.apple.Safari"].muted);
+        assert!(!engine.configs.contains_key("com.spotify.client"));
+
+        // Frontmost is not an active audio app -> falls back to first running app (Spotify).
+        assert_eq!(
+            engine
+                .toggle_mute_active_app(Some("com.apple.Finder"))
+                .as_deref(),
+            Some("Spotify")
+        );
+        assert!(engine.configs["com.spotify.client"].muted);
     }
 }

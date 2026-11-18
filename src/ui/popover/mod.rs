@@ -15,6 +15,7 @@ use gpui::{
 };
 
 use crate::audio::AudioEngine;
+use crate::hotkeys::HotkeyManager;
 use crate::state::{MixerSnapshot, WindowStyle};
 use crate::ui::ThemePalette;
 use crate::ui::icons::lucide_svg;
@@ -34,6 +35,7 @@ pub(super) enum SettingsTab {
 pub struct TrayPopoverView {
     pub(super) engine: Arc<Mutex<AudioEngine>>,
     pub(super) updater: Arc<Mutex<UpdateController>>,
+    pub(super) hotkeys: Arc<Mutex<HotkeyManager>>,
     pub(super) update_banner_dismissed: bool,
     pub(super) snapshot: MixerSnapshot,
     pub(super) icon_cache: HashMap<String, Arc<Image>>,
@@ -58,11 +60,13 @@ impl TrayPopoverView {
     pub fn new(
         engine: Arc<Mutex<AudioEngine>>,
         updater: Arc<Mutex<UpdateController>>,
+        hotkeys: Arc<Mutex<HotkeyManager>>,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut view = Self {
             engine,
             updater,
+            hotkeys,
             update_banner_dismissed: false,
             snapshot: MixerSnapshot::default(),
             icon_cache: HashMap::new(),

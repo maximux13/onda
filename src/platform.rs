@@ -3,7 +3,7 @@ use objc2::MainThreadMarker;
 use objc2_app_kit::{
     NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
     NSApplication, NSEvent, NSScreen, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
-    NSVisualEffectState, NSVisualEffectView, NSWindow,
+    NSVisualEffectState, NSVisualEffectView, NSWindow, NSWorkspace,
 };
 use objc2_foundation::{NSPoint, NSSize, NSUserDefaults, ns_string};
 
@@ -272,6 +272,14 @@ pub fn popover_slide_down_step(target_top_y: f64, progress: f32) -> (f64, f64, f
     let y = target_top_y + (1.0 - eased) * 42.0;
     let scale = 0.92 + 0.08 * eased;
     (y, eased, scale)
+}
+
+/// Returns the bundle identifier of the current frontmost macOS application, if any.
+pub fn frontmost_app_bundle_id() -> Option<String> {
+    let workspace = NSWorkspace::sharedWorkspace();
+    let app = workspace.frontmostApplication()?;
+    let bundle_id = app.bundleIdentifier()?;
+    Some(bundle_id.to_string())
 }
 
 #[cfg(test)]
