@@ -10,13 +10,14 @@ use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Context, Image, ImageFormat, SharedString, Window, WindowBackgroundAppearance, div,
-    px, rgb,
+    AnyElement, Context, FontWeight, Image, ImageFormat, SharedString, Window,
+    WindowBackgroundAppearance, div, px, rgb,
 };
 
 use crate::audio::AudioEngine;
 use crate::state::{MixerSnapshot, WindowStyle};
 use crate::ui::ThemePalette;
+use crate::ui::icons::lucide_svg;
 
 /// Sidebar tab in the `Settings` view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,6 +115,56 @@ impl TrayPopoverView {
                 self.icon_cache.insert(app.info.bundle_id.clone(), image);
             }
         }
+    }
+
+    /// Renders the shared left-side header icon badge, title, and subtitle so
+    /// the mixer and settings headers match in icon size and typography.
+    pub(super) fn render_header_title(
+        &self,
+        icon_path: &'static str,
+        title: &'static str,
+        subtitle: &'static str,
+        palette: ThemePalette,
+    ) -> impl IntoElement {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(10.0))
+            .min_w_0()
+            .child(
+                div()
+                    .size(px(38.0))
+                    .rounded(px(11.0))
+                    .bg(palette.card_bg)
+                    .border_1()
+                    .border_color(palette.card_border)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .flex_shrink_0()
+                    .child(lucide_svg(icon_path, 22.0, palette.text_primary)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .justify_center()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .text_base()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(palette.text_primary)
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .truncate()
+                            .text_xs()
+                            .text_color(palette.text_secondary)
+                            .child(subtitle),
+                    ),
+            )
     }
 
     /// Renders an iOS-style pill toggle switch matching the mockup.

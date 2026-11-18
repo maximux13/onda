@@ -27,51 +27,12 @@ impl TrayPopoverView {
             .gap(px(10.0))
             .pb(px(6.0))
             // Left: Waveform icon badge + Onda title & subtitle
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.0))
-                    .min_w_0()
-                    .child(
-                        div()
-                            .size(px(38.0))
-                            .rounded(px(11.0))
-                            .bg(palette.card_bg)
-                            .border_1()
-                            .border_color(palette.card_border)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .flex_shrink_0()
-                            .child(lucide_svg(
-                                IconName::AUDIO_LINES,
-                                22.0,
-                                palette.text_primary,
-                            )),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .justify_center()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_base()
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(palette.text_primary)
-                                    .child("Onda"),
-                            )
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_xs()
-                                    .text_color(palette.text_secondary)
-                                    .child("Control audio for each application"),
-                            ),
-                    ),
-            )
+            .child(self.render_header_title(
+                IconName::AUDIO_LINES,
+                "Onda",
+                "Control audio for each application",
+                palette,
+            ))
             // Right: Circular Settings button + Pin button
             .child(
                 div()

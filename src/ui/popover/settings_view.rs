@@ -964,7 +964,7 @@ impl TrayPopoverView {
             .flex()
             .flex_col()
             .gap(px(12.0))
-            // Top Header: Large frosted gear squircle + Settings title + Back button
+            // Top Header: Frosted gear squircle + Settings title + Back button
             .child(
                 div()
                     .w_full()
@@ -972,51 +972,12 @@ impl TrayPopoverView {
                     .items_center()
                     .justify_between()
                     .gap(px(10.0))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(12.0))
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .size(px(46.0))
-                                    .rounded(px(12.0))
-                                    .bg(palette.card_bg)
-                                    .border_1()
-                                    .border_color(palette.card_border)
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .flex_shrink_0()
-                                    .child(lucide_svg(
-                                        IconName::SETTINGS,
-                                        26.0,
-                                        palette.text_primary,
-                                    )),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .justify_center()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .text_base()
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(palette.text_primary)
-                                            .child("Settings"),
-                                    )
-                                    .child(
-                                        div()
-                                            .truncate()
-                                            .text_xs()
-                                            .text_color(palette.text_secondary)
-                                            .child("Customize your experience"),
-                                    ),
-                            ),
-                    )
+                    .child(self.render_header_title(
+                        IconName::SETTINGS,
+                        "Settings",
+                        "Customize your experience",
+                        palette,
+                    ))
                     .child(
                         div()
                             .id("settings-back-btn")
