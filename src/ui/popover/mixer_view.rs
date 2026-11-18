@@ -377,6 +377,7 @@ impl TrayPopoverView {
         cx: &mut Context<Self>,
     ) {
         let clamped = volume.clamp(0.0, 1.0);
+        let mut should_unmute = false;
         if let Some(dev) = self
             .snapshot
             .input_devices
@@ -386,10 +387,14 @@ impl TrayPopoverView {
             dev.volume = clamped;
             if clamped > 0.001 && dev.muted {
                 dev.muted = false;
+                should_unmute = true;
             }
         }
         if let Ok(mut engine) = self.engine.lock() {
             engine.set_input_device_volume(device_id, clamped);
+            if should_unmute {
+                engine.set_input_device_mute(device_id, false);
+            }
         }
         cx.notify();
     }
