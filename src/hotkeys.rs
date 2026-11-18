@@ -1,18 +1,31 @@
 use std::collections::HashMap;
 
 use global_hotkey::{GlobalHotKeyManager, hotkey::HotKey};
+use thiserror::Error;
 
 use crate::state::{ShortcutAction, ShortcutBinding, ShortcutsConfig};
 
+/// Errors returned when parsing a global keyboard shortcut accelerator.
+#[derive(Debug, Error)]
+pub enum HotkeyError {
+    #[error("Shortcut accelerator cannot be empty")]
+    EmptyAccelerator,
+    #[error("Invalid shortcut '{accelerator}': {reason}")]
+    InvalidAccelerator { accelerator: String, reason: String },
+}
+
 /// Parses a human-readable accelerator string (e.g. `"CmdOrCtrl+Shift+M"`) into a [`HotKey`].
-pub fn parse_hotkey(accel: &str) -> Result<HotKey, String> {
+pub fn parse_hotkey(accel: &str) -> Result<HotKey, HotkeyError> {
     let trimmed = accel.trim();
     if trimmed.is_empty() {
-        return Err("Shortcut accelerator cannot be empty".to_string());
+        return Err(HotkeyError::EmptyAccelerator);
     }
     trimmed
         .parse::<HotKey>()
-        .map_err(|err| format!("Invalid shortcut '{trimmed}': {err}"))
+        .map_err(|err| HotkeyError::InvalidAccelerator {
+            accelerator: trimmed.to_string(),
+            reason: err.to_string(),
+        })
 }
 
 /// Manages system-wide global keyboard shortcuts via [`GlobalHotKeyManager`].

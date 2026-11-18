@@ -407,27 +407,36 @@ pub fn list_input_devices() -> Vec<InputDeviceInfo> {
     devices
 }
 
-/// Sets the volume of a specific output device, clamped to `0.0..=1.0`.
-pub fn set_device_volume(device_id: u32, volume: f32) -> Result<(), String> {
+fn set_scoped_device_volume(
+    device_id: u32,
+    scope: AudioObjectPropertyScope,
+    volume: f32,
+    not_settable_msg: &str,
+) -> Result<(), String> {
     let clamped = volume.clamp(0.0, 1.0);
 
     let virtual_vol_addr = scoped_address(
         K_AUDIO_HARDWARE_SERVICE_DEVICE_PROPERTY_VIRTUAL_MAIN_VOLUME,
-        kAudioObjectPropertyScopeOutput,
+        scope,
         kAudioObjectPropertyElementMain,
     );
     if has_settable_property(device_id, &virtual_vol_addr) {
         return set_f32_property(device_id, &virtual_vol_addr, clamped);
     }
 
+    let ch0_addr = scoped_address(
+        kAudioDevicePropertyVolumeScalar,
+        scope,
+        kAudioObjectPropertyElementMain,
+    );
+    if has_settable_property(device_id, &ch0_addr) {
+        return set_f32_property(device_id, &ch0_addr, clamped);
+    }
+
     let mut set_any = false;
     let mut last_err = None;
     for channel in [1u32, 2u32] {
-        let ch_addr = scoped_address(
-            kAudioDevicePropertyVolumeScalar,
-            kAudioObjectPropertyScopeOutput,
-            channel,
-        );
+        let ch_addr = scoped_address(kAudioDevicePropertyVolumeScalar, scope, channel);
         if has_settable_property(device_id, &ch_addr) {
             match set_f32_property(device_id, &ch_addr, clamped) {
                 Ok(()) => set_any = true,
@@ -439,9 +448,18 @@ pub fn set_device_volume(device_id: u32, volume: f32) -> Result<(), String> {
     if set_any {
         Ok(())
     } else {
-        Err(last_err
-            .unwrap_or_else(|| String::from("Output device has no settable volume property")))
+        Err(last_err.unwrap_or_else(|| String::from(not_settable_msg)))
     }
+}
+
+/// Sets the volume of a specific output device, clamped to `0.0..=1.0`.
+pub fn set_device_volume(device_id: u32, volume: f32) -> Result<(), String> {
+    set_scoped_device_volume(
+        device_id,
+        kAudioObjectPropertyScopeOutput,
+        volume,
+        "Output device has no settable volume property",
+    )
 }
 
 /// Sets the mute state of a specific output device.
@@ -457,44 +475,12 @@ pub fn set_default_output_device(device_id: u32) -> Result<(), String> {
 
 /// Sets the input gain/volume of a specific input device, clamped to `0.0..=1.0`.
 pub fn set_input_device_volume(device_id: u32, volume: f32) -> Result<(), String> {
-    let clamped = volume.clamp(0.0, 1.0);
-    let virtual_vol_addr = scoped_address(
-        K_AUDIO_HARDWARE_SERVICE_DEVICE_PROPERTY_VIRTUAL_MAIN_VOLUME,
+    set_scoped_device_volume(
+        device_id,
         kAudioObjectPropertyScopeInput,
-        kAudioObjectPropertyElementMain,
-    );
-    if has_settable_property(device_id, &virtual_vol_addr) {
-        return set_f32_property(device_id, &virtual_vol_addr, clamped);
-    }
-    let ch0_addr = scoped_address(
-        kAudioDevicePropertyVolumeScalar,
-        kAudioObjectPropertyScopeInput,
-        0,
-    );
-    if has_settable_property(device_id, &ch0_addr) {
-        return set_f32_property(device_id, &ch0_addr, clamped);
-    }
-    let mut set_any = false;
-    let mut last_err = None;
-    for channel in [1u32, 2u32] {
-        let ch_addr = scoped_address(
-            kAudioDevicePropertyVolumeScalar,
-            kAudioObjectPropertyScopeInput,
-            channel,
-        );
-        if has_settable_property(device_id, &ch_addr) {
-            match set_f32_property(device_id, &ch_addr, clamped) {
-                Ok(()) => set_any = true,
-                Err(err) => last_err = Some(err),
-            }
-        }
-    }
-    if set_any {
-        Ok(())
-    } else {
-        Err(last_err
-            .unwrap_or_else(|| String::from("Input device has no settable volume property")))
-    }
+        volume,
+        "Input device has no settable volume property",
+    )
 }
 
 /// Sets the mute state of a specific input device.

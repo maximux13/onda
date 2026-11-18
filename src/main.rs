@@ -142,10 +142,14 @@ fn main() {
                     ducking_tick_counter = ducking_tick_counter.wrapping_add(1);
                     if ducking_tick_counter >= 9 {
                         ducking_tick_counter = 0;
-                        if active_window.is_none()
-                            && let Ok(mut e) = engine.lock()
-                        {
-                            e.tick_auto_ducking();
+                        let popover_open = active_window
+                            .as_ref()
+                            .is_some_and(|w| w.update(cx, |_, _, _| {}).is_ok());
+                        if !popover_open {
+                            active_window = None;
+                            if let Ok(mut e) = engine.lock() {
+                                e.tick_auto_ducking();
+                            }
                         }
                     }
                 }
