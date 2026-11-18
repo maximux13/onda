@@ -11,7 +11,7 @@ mod updater;
 use audio::AudioEngine;
 use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
 use gpui::{
-    App, AppContext, AsyncApp, Application, Entity, KeyBinding, WindowBackgroundAppearance,
+    App, AppContext, Application, AsyncApp, Entity, KeyBinding, WindowBackgroundAppearance,
     WindowBounds, WindowHandle, WindowKind, WindowOptions,
 };
 use hotkeys::HotkeyManager;
@@ -72,6 +72,7 @@ fn main() {
                 // Keep tray_handle and hotkeys alive for the lifetime of the app.
                 let _tray = tray_handle;
                 let hotkey_rx = GlobalHotKeyEvent::receiver();
+                let mut ducking_tick_counter: u8 = 0;
 
                 loop {
                     cx.background_executor()
@@ -127,6 +128,16 @@ fn main() {
                                     }
                                 }
                             }
+                        }
+                    }
+
+                    ducking_tick_counter = ducking_tick_counter.wrapping_add(1);
+                    if ducking_tick_counter >= 9 {
+                        ducking_tick_counter = 0;
+                        if active_window.is_none()
+                            && let Ok(mut e) = engine.lock()
+                        {
+                            e.tick_auto_ducking();
                         }
                     }
                 }
@@ -197,11 +208,14 @@ fn toggle_popover_window(
         let res = cx
             .open_window(options, |window, cx| {
                 let view: Entity<TrayPopoverView> = cx.new(|cx| {
-                    cx.observe_window_activation(window, |view: &mut TrayPopoverView, window, _| {
-                        if !window.is_window_active() && !view.is_pinned() {
-                            window.remove_window();
-                        }
-                    })
+                    cx.observe_window_activation(
+                        window,
+                        |view: &mut TrayPopoverView, window, _| {
+                            if !window.is_window_active() && !view.is_pinned() {
+                                window.remove_window();
+                            }
+                        },
+                    )
                     .detach();
 
                     TrayPopoverView::new(engine_clone, updater_clone, hotkeys_clone, cx)
@@ -235,8 +249,7 @@ fn toggle_popover_window(
                         .await;
                     let progress =
                         (start.elapsed().as_secs_f32() / duration.as_secs_f32()).min(1.0);
-                    let (y, alpha, scale) =
-                        platform::popover_slide_down_step(target_y, progress);
+                    let (y, alpha, scale) = platform::popover_slide_down_step(target_y, progress);
                     let _ = cx.update(|_| {
                         platform::set_popover_window_state(
                             POPOVER_WIDTH,

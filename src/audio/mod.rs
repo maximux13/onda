@@ -368,6 +368,106 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
         }
     }
 
+    fn update_device_tracking(&mut self, devices: &[OutputDeviceInfo]) {
+        let default_dev = devices
+            .iter()
+            .find(|d| d.is_default)
+            .or_else(|| devices.first());
+
+        self.last_output_uid = default_dev
+            .map(|d| d.uid.clone())
+            .or_else(|| self.backend.default_output_device_uid());
+        self.last_device_uids = devices.iter().map(|d| d.uid.clone()).collect();
+    }
+
+    fn update_process_tracking(&mut self, processes: &[AudioAppInfo]) {
+        self.last_object_ids.clear();
+        for proc in processes {
+            if proc.is_running_output {
+                self.last_object_ids
+                    .insert(proc.bundle_id.clone(), proc.object_ids.clone());
+            }
+        }
+
+        let active_bundle_ids: HashSet<&str> = processes
+            .iter()
+            .filter(|p| p.is_running_output)
+            .map(|p| p.bundle_id.as_str())
+            .collect();
+        self.taps
+            .retain(|bundle_id, _| active_bundle_ids.contains(bundle_id.as_str()));
+    }
+
+    fn reconcile_ducking_and_taps(
+        &mut self,
+        processes: &[AudioAppInfo],
+    ) -> (bool, HashMap<String, f32>) {
+        // Ensure taps exist for active processes before sampling voice peaks for auto-ducking.
+        for proc in processes {
+            if proc.is_running_output {
+                let config = self
+                    .configs
+                    .get(&proc.bundle_id)
+                    .cloned()
+                    .unwrap_or_default();
+                self.ensure_tap_with_apply(&proc.bundle_id, &config, false);
+            }
+        }
+
+        let mut sampled_peaks = HashMap::new();
+        let voice_peak_active = if self.prefs.auto_ducking.enabled {
+            let threshold = self.prefs.auto_ducking.threshold;
+            let mut voice_active = false;
+            for (bundle_id, tap) in &self.taps {
+                let peak = tap.handle.peak_level();
+                sampled_peaks.insert(bundle_id.clone(), peak);
+                if self
+                    .prefs
+                    .auto_ducking
+                    .voice_bundle_ids
+                    .iter()
+                    .any(|id| id == bundle_id)
+                    && peak >= threshold
+                {
+                    voice_active = true;
+                }
+            }
+            voice_active
+        } else {
+            false
+        };
+
+        let ducking_active =
+            self.ducking
+                .update(voice_peak_active, &self.prefs.auto_ducking, Instant::now());
+
+        for proc in processes {
+            if proc.is_running_output {
+                let config = self
+                    .configs
+                    .get(&proc.bundle_id)
+                    .cloned()
+                    .unwrap_or_default();
+                self.ensure_tap(&proc.bundle_id, &config);
+            }
+        }
+
+        (ducking_active, sampled_peaks)
+    }
+
+    /// Reconciles active process taps and updates auto-ducking state when enabled or active.
+    /// Intended for background polling when the popover window is closed.
+    pub fn tick_auto_ducking(&mut self) {
+        if !self.prefs.auto_ducking.enabled && !self.ducking.is_active {
+            return;
+        }
+        let devices = self.backend.list_output_devices();
+        let processes = self.backend.list_audio_processes(false);
+        self.update_device_tracking(&devices);
+        self.update_process_tracking(&processes);
+        self.reconcile_ducking_and_taps(&processes);
+    }
+
     /// Fetches the latest output devices, input device name, and active audio processes,
     /// reconciles per-app process taps, and returns a full [`MixerSnapshot`] for the UI.
     pub fn snapshot(&mut self) -> MixerSnapshot {
@@ -385,52 +485,9 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
             .map(|d| d.name.clone())
             .unwrap_or_else(|| self.backend.fallback_master_name());
 
-        self.last_output_uid = default_dev
-            .map(|d| d.uid.clone())
-            .or_else(|| self.backend.default_output_device_uid());
-
-        self.last_device_uids = devices.iter().map(|d| d.uid.clone()).collect();
-
-        self.last_object_ids.clear();
-        for proc in &processes {
-            if proc.is_running_output {
-                self.last_object_ids
-                    .insert(proc.bundle_id.clone(), proc.object_ids.clone());
-            }
-        }
-
-        let active_bundle_ids: HashSet<&str> = processes
-            .iter()
-            .filter(|p| p.is_running_output)
-            .map(|p| p.bundle_id.as_str())
-            .collect();
-        self.taps
-            .retain(|bundle_id, _| active_bundle_ids.contains(bundle_id.as_str()));
-
-        // Ensure taps exist for active processes before sampling voice peaks for auto-ducking.
-        for proc in &processes {
-            if proc.is_running_output {
-                let config = self
-                    .configs
-                    .get(&proc.bundle_id)
-                    .cloned()
-                    .unwrap_or_default();
-                self.ensure_tap_with_apply(&proc.bundle_id, &config, false);
-            }
-        }
-
-        let threshold = self.prefs.auto_ducking.threshold;
-        let voice_peak_active = self.taps.iter().any(|(bundle_id, tap)| {
-            self.prefs
-                .auto_ducking
-                .voice_bundle_ids
-                .iter()
-                .any(|id| id == bundle_id)
-                && tap.handle.peak_level() >= threshold
-        });
-        let ducking_active =
-            self.ducking
-                .update(voice_peak_active, &self.prefs.auto_ducking, Instant::now());
+        self.update_device_tracking(&devices);
+        self.update_process_tracking(&processes);
+        let (ducking_active, sampled_peaks) = self.reconcile_ducking_and_taps(&processes);
 
         let mut apps = Vec::with_capacity(processes.len());
         for proc in processes {
@@ -440,15 +497,15 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
                 .cloned()
                 .unwrap_or_default();
 
-            if proc.is_running_output {
-                self.ensure_tap(&proc.bundle_id, &config);
-            }
-
-            let peak_level = self
-                .taps
+            let peak_level = sampled_peaks
                 .get(&proc.bundle_id)
-                .map(|t| t.handle.peak_level())
-                .unwrap_or(0.0);
+                .copied()
+                .unwrap_or_else(|| {
+                    self.taps
+                        .get(&proc.bundle_id)
+                        .map(|t| t.handle.peak_level())
+                        .unwrap_or(0.0)
+                });
 
             let is_ducked = self.is_bundle_ducked(&proc.bundle_id);
 
@@ -707,7 +764,11 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
     /// Toggles mute on the frontmost running audio app, or falls back to the first running output app.
     /// Returns the toggled application's display name, if any.
     pub fn toggle_mute_active_app(&mut self, frontmost_bundle_id: Option<&str>) -> Option<String> {
+        let devices = self.backend.list_output_devices();
         let processes = self.backend.list_audio_processes(false);
+        self.update_device_tracking(&devices);
+        self.update_process_tracking(&processes);
+
         let target = frontmost_bundle_id
             .and_then(|bid| {
                 processes
@@ -716,21 +777,26 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
             })
             .or_else(|| processes.iter().find(|p| p.is_running_output))?;
 
-        let currently_muted = self.configs.get(&target.bundle_id).is_some_and(|c| c.muted);
-        self.set_app_mute(&target.bundle_id, !currently_muted);
-        Some(target.name.clone())
+        let target_bundle_id = target.bundle_id.clone();
+        let target_name = target.name.clone();
+        let currently_muted = self.configs.get(&target_bundle_id).is_some_and(|c| c.muted);
+        self.set_app_mute(&target_bundle_id, !currently_muted);
+        Some(target_name)
     }
 
     /// Cycles the default macOS output device to the next available output device.
     /// Returns the newly selected device's display name, if any.
     pub fn cycle_default_output_device(&mut self) -> Option<String> {
         let devices = self.backend.list_output_devices();
-        if devices.is_empty() {
+        if devices.len() <= 1 {
             return None;
         }
         let current_idx = devices.iter().position(|d| d.is_default).unwrap_or(0);
         let next = &devices[(current_idx + 1) % devices.len()];
         self.backend.set_default_output_device(next.id);
+        self.last_output_uid = Some(next.uid.clone());
+        self.last_device_uids = devices.iter().map(|d| d.uid.clone()).collect();
+        self.refresh_all_taps();
         Some(next.name.clone())
     }
 
@@ -787,6 +853,10 @@ mod tests {
     impl FakeTap {
         fn last_volume(&self) -> f32 {
             self.state.borrow().volume
+        }
+
+        fn last_muted(&self) -> bool {
+            self.state.borrow().muted
         }
     }
 
@@ -1353,5 +1423,85 @@ mod tests {
             Some("Spotify")
         );
         assert!(engine.configs["com.spotify.client"].muted);
+    }
+
+    #[test]
+    fn tick_auto_ducking_engages_and_releases_without_snapshot() {
+        let backend = FakeBackend::with_devices_and_processes(
+            vec![make_device(1, "uid-default", "Speakers", true)],
+            vec![
+                make_app("com.spotify.client", "Spotify", vec![20]),
+                make_app("com.hnc.Discord", "Discord", vec![10]),
+            ],
+        );
+        let mut engine = AudioEngine::with_backend_and_store(backend, MemoryStore::default());
+        engine.set_app_volume("com.spotify.client", 0.80);
+        engine.set_auto_ducking_config(AutoDuckingConfig {
+            enabled: true,
+            duck_amount: 0.25,
+            threshold: 0.05,
+            release_ms: 0,
+            ..Default::default()
+        });
+
+        engine.backend.set_fake_peak("com.hnc.Discord", 0.30);
+        engine.tick_auto_ducking();
+        assert!(engine.ducking.is_active);
+        assert!((engine.taps["com.spotify.client"].handle.last_volume() - 0.20).abs() < 1e-5);
+
+        engine.backend.set_fake_peak("com.hnc.Discord", 0.0);
+        engine.tick_auto_ducking();
+        assert!(!engine.ducking.is_active);
+        assert!((engine.taps["com.spotify.client"].handle.last_volume() - 0.80).abs() < 1e-5);
+    }
+
+    #[test]
+    fn toggle_mute_active_app_creates_muted_tap_without_prior_snapshot() {
+        let backend = FakeBackend::with_devices_and_processes(
+            vec![make_device(1, "uid-1", "Speakers", true)],
+            vec![make_app("com.apple.Safari", "Safari", vec![20])],
+        );
+        let mut engine = AudioEngine::with_backend_and_store(backend, MemoryStore::default());
+
+        assert_eq!(
+            engine
+                .toggle_mute_active_app(Some("com.apple.Safari"))
+                .as_deref(),
+            Some("Safari")
+        );
+        assert!(engine.taps.contains_key("com.apple.Safari"));
+        assert!(engine.taps["com.apple.Safari"].handle.last_muted());
+    }
+
+    #[test]
+    fn cycle_default_output_device_moves_existing_taps_and_skips_single_device() {
+        let single_backend = FakeBackend::with_devices_and_processes(
+            vec![make_device(1, "uid-1", "Speakers", true)],
+            vec![make_app("com.spotify.client", "Spotify", vec![10])],
+        );
+        let mut single_engine =
+            AudioEngine::with_backend_and_store(single_backend, MemoryStore::default());
+        assert_eq!(single_engine.cycle_default_output_device(), None);
+
+        let backend = FakeBackend::with_devices_and_processes(
+            vec![
+                make_device(1, "uid-1", "Speakers", true),
+                make_device(2, "uid-2", "AirPods", false),
+            ],
+            vec![make_app("com.spotify.client", "Spotify", vec![10])],
+        );
+        let mut engine = AudioEngine::with_backend_and_store(backend, MemoryStore::default());
+        let _ = engine.snapshot();
+        assert_eq!(
+            engine.taps["com.spotify.client"].handle.output_device_uid(),
+            "uid-1"
+        );
+
+        let next = engine.cycle_default_output_device();
+        assert_eq!(next.as_deref(), Some("AirPods"));
+        assert_eq!(
+            engine.taps["com.spotify.client"].handle.output_device_uid(),
+            "uid-2"
+        );
     }
 }

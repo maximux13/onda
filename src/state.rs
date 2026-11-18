@@ -436,9 +436,15 @@ mod tests {
         let legacy_json = r#"{"theme":"Light"}"#;
         let prefs: Preferences = serde_json::from_str(legacy_json).expect("deserialize legacy");
         assert!(!prefs.shortcuts.toggle_popover.enabled);
-        assert_eq!(prefs.shortcuts.toggle_popover.accelerator, "CmdOrCtrl+Shift+O");
+        assert_eq!(
+            prefs.shortcuts.toggle_popover.accelerator,
+            "CmdOrCtrl+Shift+O"
+        );
         assert!(!prefs.shortcuts.mute_active_app.enabled);
-        assert_eq!(prefs.shortcuts.mute_active_app.accelerator, "CmdOrCtrl+Shift+M");
+        assert_eq!(
+            prefs.shortcuts.mute_active_app.accelerator,
+            "CmdOrCtrl+Shift+M"
+        );
         assert!(!prefs.shortcuts.cycle_output_device.enabled);
         assert_eq!(
             prefs.shortcuts.cycle_output_device.accelerator,

@@ -370,12 +370,7 @@ impl TrayPopoverView {
             ))
     }
 
-    fn set_input_device_volume(
-        &mut self,
-        device_id: u32,
-        volume: f32,
-        cx: &mut Context<Self>,
-    ) {
+    fn set_input_device_volume(&mut self, device_id: u32, volume: f32, cx: &mut Context<Self>) {
         let clamped = volume.clamp(0.0, 1.0);
         let mut should_unmute = false;
         if let Some(dev) = self
@@ -458,11 +453,7 @@ impl TrayPopoverView {
                         .items_center()
                         .justify_center()
                         .flex_shrink_0()
-                        .child(lucide_svg(
-                            IconName::MIC_OFF,
-                            14.0,
-                            palette.text_secondary,
-                        )),
+                        .child(lucide_svg(IconName::MIC_OFF, 14.0, palette.text_secondary)),
                 )
                 .child(
                     div()
@@ -567,24 +558,19 @@ impl TrayPopoverView {
                     )),
             )
             // Right: Horizontal gain slider + percentage readout
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(80.0))
-                    .child(VolumeSlider::new(
-                        "slider-mic-gain",
-                        dev_volume,
-                        1.0,
-                        dev_muted,
-                        0x2582ff,
-                        theme,
-                        move |val, _window, cx| {
-                            entity_slider.update(cx, |this, cx| {
-                                this.set_input_device_volume(dev_id, val, cx);
-                            });
-                        },
-                    )),
-            )
+            .child(div().flex_1().min_w(px(80.0)).child(VolumeSlider::new(
+                "slider-mic-gain",
+                dev_volume,
+                1.0,
+                dev_muted,
+                0x2582ff,
+                theme,
+                move |val, _window, cx| {
+                    entity_slider.update(cx, |this, cx| {
+                        this.set_input_device_volume(dev_id, val, cx);
+                    });
+                },
+            )))
             .child(
                 div()
                     .w(px(40.0))

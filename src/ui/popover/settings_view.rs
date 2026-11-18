@@ -291,9 +291,7 @@ impl TrayPopoverView {
                 let bid_for_click = bundle_id.clone();
                 chips = chips.child(
                     div()
-                        .id(SharedString::from(format!(
-                            "cfg-duck-{prefix}-{bundle_id}"
-                        )))
+                        .id(SharedString::from(format!("cfg-duck-{prefix}-{bundle_id}")))
                         .px(px(8.0))
                         .py(px(3.0))
                         .rounded_full()
@@ -1110,7 +1108,10 @@ impl TrayPopoverView {
                                             .text_xs()
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(palette.text_primary)
-                                            .child("Onda v0.1.0"),
+                                            .child(format!(
+                                                "Onda v{}",
+                                                crate::updater::installed_app_version()
+                                            )),
                                     )
                                     .child(
                                         div()
@@ -1227,22 +1228,17 @@ impl TrayPopoverView {
                             .text_color(palette.text_primary)
                             .child(spec.label),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.0))
-                            .child(pills)
-                            .child(self.render_ios_toggle(
-                                SharedString::from(format!("cfg-hotkey-{}-toggle", spec.id_prefix)),
-                                binding.enabled,
-                                palette,
-                                move |this, _event, _window, cx| {
-                                    this.toggle_shortcut_enabled(action, cx);
-                                },
-                                cx,
-                            )),
-                    ),
+                    .child(div().flex().items_center().gap(px(8.0)).child(pills).child(
+                        self.render_ios_toggle(
+                            SharedString::from(format!("cfg-hotkey-{}-toggle", spec.id_prefix)),
+                            binding.enabled,
+                            palette,
+                            move |this, _event, _window, cx| {
+                                this.toggle_shortcut_enabled(action, cx);
+                            },
+                            cx,
+                        ),
+                    )),
             );
         }
 

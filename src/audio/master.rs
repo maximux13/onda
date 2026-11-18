@@ -466,17 +466,35 @@ pub fn set_input_device_volume(device_id: u32, volume: f32) -> Result<(), String
     if has_settable_property(device_id, &virtual_vol_addr) {
         return set_f32_property(device_id, &virtual_vol_addr, clamped);
     }
-    for channel in [0u32, 1u32, 2u32] {
+    let ch0_addr = scoped_address(
+        kAudioDevicePropertyVolumeScalar,
+        kAudioObjectPropertyScopeInput,
+        0,
+    );
+    if has_settable_property(device_id, &ch0_addr) {
+        return set_f32_property(device_id, &ch0_addr, clamped);
+    }
+    let mut set_any = false;
+    let mut last_err = None;
+    for channel in [1u32, 2u32] {
         let ch_addr = scoped_address(
             kAudioDevicePropertyVolumeScalar,
             kAudioObjectPropertyScopeInput,
             channel,
         );
         if has_settable_property(device_id, &ch_addr) {
-            return set_f32_property(device_id, &ch_addr, clamped);
+            match set_f32_property(device_id, &ch_addr, clamped) {
+                Ok(()) => set_any = true,
+                Err(err) => last_err = Some(err),
+            }
         }
     }
-    Err(String::from("Input device has no settable volume property"))
+    if set_any {
+        Ok(())
+    } else {
+        Err(last_err
+            .unwrap_or_else(|| String::from("Input device has no settable volume property")))
+    }
 }
 
 /// Sets the mute state of a specific input device.
