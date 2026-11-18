@@ -52,7 +52,7 @@ impl ThemePalette {
 
     /// Returns the color palette corresponding to the active [`ThemeMode`], [`WindowStyle`],
     /// and normalized `glass_opacity` slider value (`0.0..=1.0`, mapped onto `60%..=100%`
-    /// light glass alpha) for `WindowStyle::Transparent`.
+    /// glass alpha) for `WindowStyle::Transparent`.
     pub fn for_theme_with_opacity(
         theme: ThemeMode,
         window_style: WindowStyle,
@@ -60,15 +60,14 @@ impl ThemePalette {
     ) -> Self {
         let is_dark = Self::resolve_is_dark(theme);
         let t = glass_opacity.clamp(0.0, 1.0);
-        let light_alpha = 0.60 + 0.40 * t;
-        let dark_alpha = 0.25 + 0.36 * t;
+        let glass_alpha = 0.60 + 0.40 * t;
         if is_dark {
             let panel_bg = match window_style {
                 WindowStyle::Transparent => Rgba {
                     r: 0.086,
                     g: 0.114,
                     b: 0.188,
-                    a: dark_alpha,
+                    a: glass_alpha,
                 },
                 WindowStyle::Solid => rgba(0x1e243bff),
             };
@@ -103,7 +102,7 @@ impl ThemePalette {
                         r: 1.0,
                         g: 1.0,
                         b: 1.0,
-                        a: light_alpha,
+                        a: glass_alpha,
                     },
                     rgba(0xffffff1a),
                     rgba(0xffffffb8),
@@ -169,7 +168,7 @@ mod tests {
         let dark = ThemePalette::for_theme(ThemeMode::Dark, WindowStyle::Transparent);
         let light = ThemePalette::for_theme(ThemeMode::Light, WindowStyle::Transparent);
         assert!(
-            dark.panel_bg.a < 0.45,
+            dark.panel_bg.a < 0.85,
             "dark glass panel_bg alpha was {}",
             dark.panel_bg.a
         );
@@ -187,14 +186,13 @@ mod tests {
 
     #[test]
     fn glass_opacity_slider_maps_zero_to_hundred_onto_sixty_to_hundred_percent_alpha() {
-        let min_light =
-            ThemePalette::for_theme_with_opacity(ThemeMode::Light, WindowStyle::Transparent, 0.0);
-        let mid_light =
-            ThemePalette::for_theme_with_opacity(ThemeMode::Light, WindowStyle::Transparent, 0.5);
-        let max_light =
-            ThemePalette::for_theme_with_opacity(ThemeMode::Light, WindowStyle::Transparent, 1.0);
-        assert!((min_light.panel_bg.a - 0.60).abs() < 1e-5);
-        assert!((mid_light.panel_bg.a - 0.80).abs() < 1e-5);
-        assert!((max_light.panel_bg.a - 1.00).abs() < 1e-5);
+        for theme in [ThemeMode::Light, ThemeMode::Dark] {
+            let min = ThemePalette::for_theme_with_opacity(theme, WindowStyle::Transparent, 0.0);
+            let mid = ThemePalette::for_theme_with_opacity(theme, WindowStyle::Transparent, 0.5);
+            let max = ThemePalette::for_theme_with_opacity(theme, WindowStyle::Transparent, 1.0);
+            assert!((min.panel_bg.a - 0.60).abs() < 1e-5);
+            assert!((mid.panel_bg.a - 0.80).abs() < 1e-5);
+            assert!((max.panel_bg.a - 1.00).abs() < 1e-5);
+        }
     }
 }
