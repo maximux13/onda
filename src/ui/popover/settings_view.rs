@@ -1,5 +1,9 @@
+use std::time::Duration;
+
 use gpui::prelude::*;
-use gpui::{AnyElement, Context, FontWeight, div, px, rgb, rgba};
+use gpui::{
+    Animation, AnimationExt, AnyElement, Context, FontWeight, div, ease_out_quint, px, rgb, rgba,
+};
 
 use crate::state::{ThemeMode, WindowStyle};
 use crate::ui::ThemePalette;
@@ -1036,16 +1040,30 @@ impl TrayPopoverView {
                             )),
                     )
                     // Right Content Area
-                    .child(
-                        div()
+                    .child({
+                        let pane = div()
                             .id("settings-right-scroll")
                             .flex_1()
                             .min_w_0()
                             .min_h_0()
                             .overflow_y_scroll()
                             .pr(px(2.0))
-                            .child(right_content),
-                    ),
+                            .child(right_content);
+                        if self.view_transition_id > 0 {
+                            pane.with_animation(
+                                ("settings-tab-switch", self.view_transition_id),
+                                Animation::new(Duration::from_millis(120))
+                                    .with_easing(ease_out_quint()),
+                                |el, delta| {
+                                    let t = delta.clamp(0.0, 1.0);
+                                    el.opacity(0.75 + 0.25 * t)
+                                },
+                            )
+                            .into_any_element()
+                        } else {
+                            pane.into_any_element()
+                        }
+                    }),
             )
     }
 }

@@ -159,7 +159,7 @@ impl Render for TrayPopoverView {
             self.render_mixer_view(palette, cx).into_any_element()
         };
 
-        div()
+        let panel = div()
             .w_full()
             .h_full()
             .flex()
@@ -171,34 +171,24 @@ impl Render for TrayPopoverView {
             .border_color(palette.panel_border)
             .shadow_lg()
             .text_color(palette.text_primary)
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
-                    .h_full()
-                    .child(content)
-                    .with_animation(
-                        ("view-switch", self.view_transition_id),
-                        Animation::new(Duration::from_millis(150)).with_easing(ease_out_quint()),
-                        |el, delta| el.opacity(delta),
-                    ),
-            )
+            .child(div().flex_1().min_h_0().w_full().h_full().child(content))
             .with_animation(
                 "popover-enter",
-                Animation::new(Duration::from_millis(180)).with_easing(ease_out_quint()),
+                Animation::new(Duration::from_millis(200)).with_easing(ease_out_quint()),
                 |el, delta| {
                     let (opacity, offset_px) = popover_enter_metrics(delta);
                     el.opacity(opacity).mt(px(offset_px))
                 },
-            )
+            );
+
+        div().w_full().h_full().overflow_hidden().child(panel)
     }
 }
 
 fn popover_enter_metrics(delta: f32) -> (f32, f32) {
     let t = delta.clamp(0.0, 1.0);
     let opacity = t;
-    let top_offset_px = (1.0 - t) * -8.0;
+    let top_offset_px = (1.0 - t) * -28.0;
     (opacity, top_offset_px)
 }
 
@@ -210,7 +200,7 @@ mod tests {
     fn popover_enter_metrics_should_start_transparent_and_offset_when_delta_zero() {
         let (opacity, offset) = popover_enter_metrics(0.0);
         assert_eq!(opacity, 0.0);
-        assert_eq!(offset, -8.0);
+        assert_eq!(offset, -28.0);
     }
 
     #[test]
@@ -222,7 +212,7 @@ mod tests {
 
     #[test]
     fn popover_enter_metrics_should_clamp_out_of_range_deltas() {
-        assert_eq!(popover_enter_metrics(-0.5), (0.0, -8.0));
+        assert_eq!(popover_enter_metrics(-0.5), (0.0, -28.0));
         assert_eq!(popover_enter_metrics(1.5), (1.0, 0.0));
     }
 }
