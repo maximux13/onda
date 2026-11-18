@@ -9,7 +9,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gpui::prelude::*;
-use gpui::{AnyElement, Context, Image, ImageFormat, SharedString, Window, div, px, rgb};
+use gpui::{
+    Animation, AnimationExt, AnyElement, Context, Image, ImageFormat, SharedString, Window, div,
+    ease_out_quint, px, rgb,
+};
 
 use crate::audio::AudioEngine;
 use crate::state::MixerSnapshot;
@@ -162,5 +165,45 @@ impl Render for TrayPopoverView {
             .shadow_lg()
             .text_color(palette.text_primary)
             .child(content)
+            .with_animation(
+                "popover-enter",
+                Animation::new(Duration::from_millis(180)).with_easing(ease_out_quint()),
+                |el, delta| {
+                    let (opacity, offset_px) = popover_enter_metrics(delta);
+                    el.opacity(opacity).mt(px(offset_px))
+                },
+            )
+    }
+}
+
+fn popover_enter_metrics(delta: f32) -> (f32, f32) {
+    let t = delta.clamp(0.0, 1.0);
+    let opacity = t;
+    let top_offset_px = (1.0 - t) * -8.0;
+    (opacity, top_offset_px)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn popover_enter_metrics_should_start_transparent_and_offset_when_delta_zero() {
+        let (opacity, offset) = popover_enter_metrics(0.0);
+        assert_eq!(opacity, 0.0);
+        assert_eq!(offset, -8.0);
+    }
+
+    #[test]
+    fn popover_enter_metrics_should_settle_opaque_and_aligned_when_delta_one() {
+        let (opacity, offset) = popover_enter_metrics(1.0);
+        assert_eq!(opacity, 1.0);
+        assert_eq!(offset, 0.0);
+    }
+
+    #[test]
+    fn popover_enter_metrics_should_clamp_out_of_range_deltas() {
+        assert_eq!(popover_enter_metrics(-0.5), (0.0, -8.0));
+        assert_eq!(popover_enter_metrics(1.5), (1.0, 0.0));
     }
 }
