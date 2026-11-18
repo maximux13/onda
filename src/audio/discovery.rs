@@ -14,13 +14,14 @@ use objc2_app_kit::{
 };
 use objc2_core_audio::{
     AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize, AudioObjectID,
-    AudioObjectPropertyAddress, kAudioHardwarePropertyProcessObjectList,
-    kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject,
-    kAudioProcessPropertyBundleID, kAudioProcessPropertyIsRunningOutput, kAudioProcessPropertyPID,
+    kAudioHardwarePropertyProcessObjectList, kAudioProcessPropertyBundleID,
+    kAudioProcessPropertyIsRunningOutput, kAudioProcessPropertyPID,
 };
-use objc2_core_foundation::{CFRetained, CFString};
 use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize};
 
+use super::core_audio::{
+    get_property_cfstring, get_property_i32, get_property_u32, global_address, system_object_id,
+};
 use crate::state::AudioAppInfo;
 
 type IconCacheMap = HashMap<String, (Vec<u8>, u32)>;
@@ -31,16 +32,8 @@ fn icon_cache() -> &'static Mutex<IconCacheMap> {
     ICON_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn system_object_id() -> AudioObjectID {
-    kAudioObjectSystemObject as AudioObjectID
-}
-
 fn get_process_object_ids() -> Vec<AudioObjectID> {
-    let address = AudioObjectPropertyAddress {
-        mSelector: kAudioHardwarePropertyProcessObjectList,
-        mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain,
-    };
+    let address = global_address(kAudioHardwarePropertyProcessObjectList);
 
     let mut data_size: u32 = 0;
     let status = unsafe {
@@ -76,74 +69,6 @@ fn get_process_object_ids() -> Vec<AudioObjectID> {
         ids.truncate(actual_count);
     }
     ids
-}
-
-fn get_property_u32(object_id: AudioObjectID, selector: u32) -> Option<u32> {
-    let address = AudioObjectPropertyAddress {
-        mSelector: selector,
-        mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain,
-    };
-    let mut value: u32 = 0;
-    let mut data_size = size_of::<u32>() as u32;
-    let status = unsafe {
-        AudioObjectGetPropertyData(
-            object_id,
-            NonNull::from(&address),
-            0,
-            ptr::null(),
-            NonNull::from(&mut data_size),
-            NonNull::from(&mut value).cast::<c_void>(),
-        )
-    };
-    if status == 0 { Some(value) } else { None }
-}
-
-fn get_property_i32(object_id: AudioObjectID, selector: u32) -> Option<i32> {
-    let address = AudioObjectPropertyAddress {
-        mSelector: selector,
-        mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain,
-    };
-    let mut value: i32 = 0;
-    let mut data_size = size_of::<i32>() as u32;
-    let status = unsafe {
-        AudioObjectGetPropertyData(
-            object_id,
-            NonNull::from(&address),
-            0,
-            ptr::null(),
-            NonNull::from(&mut data_size),
-            NonNull::from(&mut value).cast::<c_void>(),
-        )
-    };
-    if status == 0 { Some(value) } else { None }
-}
-
-fn get_property_cfstring(object_id: AudioObjectID, selector: u32) -> Option<String> {
-    let address = AudioObjectPropertyAddress {
-        mSelector: selector,
-        mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain,
-    };
-    let mut cf_ptr: *mut CFString = ptr::null_mut();
-    let mut data_size = size_of::<*mut CFString>() as u32;
-    let status = unsafe {
-        AudioObjectGetPropertyData(
-            object_id,
-            NonNull::from(&address),
-            0,
-            ptr::null(),
-            NonNull::from(&mut data_size),
-            NonNull::from(&mut cf_ptr).cast::<c_void>(),
-        )
-    };
-    if status != 0 {
-        return None;
-    }
-    let non_null = NonNull::new(cf_ptr)?;
-    let retained: CFRetained<CFString> = unsafe { CFRetained::from_raw(non_null) };
-    Some(retained.to_string())
 }
 
 const DEFAULT_DOMINANT_COLOR: u32 = 0x2b8eff;
@@ -441,21 +366,26 @@ pub fn list_audio_processes() -> Vec<AudioAppInfo> {
     let mut grouped: HashMap<String, AudioAppInfo> = HashMap::new();
 
     for object_id in object_ids {
-        let is_running_output = get_property_u32(object_id, kAudioProcessPropertyIsRunningOutput)
-            .map(|v| v != 0)
-            .unwrap_or(false);
+        let is_running_output = get_property_u32(
+            object_id,
+            &global_address(kAudioProcessPropertyIsRunningOutput),
+        )
+        .map(|v| v != 0)
+        .unwrap_or(false);
         if !is_running_output {
             continue;
         }
 
-        let Some(pid) = get_property_i32(object_id, kAudioProcessPropertyPID) else {
+        let Some(pid) = get_property_i32(object_id, &global_address(kAudioProcessPropertyPID))
+        else {
             continue;
         };
         if pid == self_pid {
             continue;
         }
 
-        let raw_bundle_id = get_property_cfstring(object_id, kAudioProcessPropertyBundleID);
+        let raw_bundle_id =
+            get_property_cfstring(object_id, &global_address(kAudioProcessPropertyBundleID));
         let Some((bundle_id, name, icon_png, dominant_color)) =
             resolve_app_metadata(pid, raw_bundle_id.as_deref())
         else {

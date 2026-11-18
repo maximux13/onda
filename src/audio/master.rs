@@ -11,21 +11,18 @@ use objc2_core_audio::{
     kAudioDevicePropertyMute, kAudioDevicePropertyStreamConfiguration,
     kAudioDevicePropertyVolumeScalar, kAudioHardwarePropertyDefaultInputDevice,
     kAudioHardwarePropertyDefaultOutputDevice, kAudioHardwarePropertyDevices,
-    kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeGlobal,
-    kAudioObjectPropertyScopeOutput, kAudioObjectSystemObject,
+    kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeOutput,
 };
 use objc2_core_audio_types::{AudioBuffer, AudioBufferList};
-use objc2_core_foundation::{CFRetained, CFString};
 
+use super::core_audio::{
+    get_property_cfstring, get_property_f32, get_property_u32, global_address, system_object_id,
+};
 use crate::state::{DeviceIconKind, MasterState, OutputDeviceInfo};
 
 /// `kAudioHardwareServiceDeviceProperty_VirtualMainVolume` (`'vmvc'`) from AudioToolbox.
 const K_AUDIO_HARDWARE_SERVICE_DEVICE_PROPERTY_VIRTUAL_MAIN_VOLUME: AudioObjectPropertySelector =
     0x766d7663;
-
-fn system_object_id() -> AudioObjectID {
-    kAudioObjectSystemObject as AudioObjectID
-}
 
 fn has_settable_property(object_id: AudioObjectID, address: &AudioObjectPropertyAddress) -> bool {
     if !unsafe { AudioObjectHasProperty(object_id, NonNull::from(address)) } {
@@ -40,46 +37,6 @@ fn has_settable_property(object_id: AudioObjectID, address: &AudioObjectProperty
         )
     };
     status == 0 && settable != 0
-}
-
-fn get_cfstring_property(
-    object_id: AudioObjectID,
-    address: &AudioObjectPropertyAddress,
-) -> Option<String> {
-    let mut cf_ptr: *mut CFString = ptr::null_mut();
-    let mut data_size = size_of::<*mut CFString>() as u32;
-    let status = unsafe {
-        AudioObjectGetPropertyData(
-            object_id,
-            NonNull::from(address),
-            0,
-            ptr::null(),
-            NonNull::from(&mut data_size),
-            NonNull::from(&mut cf_ptr).cast::<c_void>(),
-        )
-    };
-    if status != 0 {
-        return None;
-    }
-    let non_null = NonNull::new(cf_ptr)?;
-    let retained: CFRetained<CFString> = unsafe { CFRetained::from_raw(non_null) };
-    Some(retained.to_string())
-}
-
-fn get_f32_property(object_id: AudioObjectID, address: &AudioObjectPropertyAddress) -> Option<f32> {
-    let mut value: f32 = 0.0;
-    let mut data_size = size_of::<f32>() as u32;
-    let status = unsafe {
-        AudioObjectGetPropertyData(
-            object_id,
-            NonNull::from(address),
-            0,
-            ptr::null(),
-            NonNull::from(&mut data_size),
-            NonNull::from(&mut value).cast::<c_void>(),
-        )
-    };
-    if status == 0 { Some(value) } else { None }
 }
 
 fn set_f32_property(
@@ -104,22 +61,6 @@ fn set_f32_property(
             "AudioObjectSetPropertyData failed with OSStatus {status}"
         ))
     }
-}
-
-fn get_u32_property(object_id: AudioObjectID, address: &AudioObjectPropertyAddress) -> Option<u32> {
-    let mut value: u32 = 0;
-    let mut data_size = size_of::<u32>() as u32;
-    let status = unsafe {
-        AudioObjectGetPropertyData(
-            object_id,
-            NonNull::from(address),
-            0,
-            ptr::null(),
-            NonNull::from(&mut data_size),
-            NonNull::from(&mut value).cast::<c_void>(),
-        )
-    };
-    if status == 0 { Some(value) } else { None }
 }
 
 fn set_u32_property(
@@ -147,12 +88,8 @@ fn set_u32_property(
 }
 
 fn get_device_name(device_id: u32) -> Option<String> {
-    let name_addr = AudioObjectPropertyAddress {
-        mSelector: kAudioDevicePropertyDeviceNameCFString,
-        mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain,
-    };
-    get_cfstring_property(device_id, &name_addr).filter(|s| !s.is_empty())
+    let name_addr = global_address(kAudioDevicePropertyDeviceNameCFString);
+    get_property_cfstring(device_id, &name_addr).filter(|s| !s.is_empty())
 }
 
 pub fn get_device_volume(device_id: u32) -> f32 {
@@ -166,8 +103,8 @@ pub fn get_device_volume(device_id: u32) -> f32 {
         mScope: kAudioObjectPropertyScopeOutput,
         mElement: 1,
     };
-    get_f32_property(device_id, &virtual_vol_addr)
-        .or_else(|| get_f32_property(device_id, &ch1_vol_addr))
+    get_property_f32(device_id, &virtual_vol_addr)
+        .or_else(|| get_property_f32(device_id, &ch1_vol_addr))
         .unwrap_or(1.0)
         .clamp(0.0, 1.0)
 }
@@ -178,7 +115,7 @@ pub fn get_device_mute(device_id: u32) -> bool {
         mScope: kAudioObjectPropertyScopeOutput,
         mElement: kAudioObjectPropertyElementMain,
     };
-    get_u32_property(device_id, &mute_addr)
+    get_property_u32(device_id, &mute_addr)
         .map(|v| v != 0)
         .unwrap_or(false)
 }
@@ -266,22 +203,14 @@ fn infer_device_icon(name: &str, uid: &str) -> DeviceIconKind {
 
 /// Returns the `AudioObjectID` of the current default system output device.
 pub fn get_default_output_device() -> Option<u32> {
-    let address = AudioObjectPropertyAddress {
-        mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-        mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain,
-    };
-    get_u32_property(system_object_id(), &address).filter(|&id| id != 0)
+    let address = global_address(kAudioHardwarePropertyDefaultOutputDevice);
+    get_property_u32(system_object_id(), &address).filter(|&id| id != 0)
 }
 
 /// Returns the display name of the current default system input device.
 pub fn get_default_input_device_name() -> String {
-    let address = AudioObjectPropertyAddress {
-        mSelector: kAudioHardwarePropertyDefaultInputDevice,
-        mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain,
-    };
-    get_u32_property(system_object_id(), &address)
+    let address = global_address(kAudioHardwarePropertyDefaultInputDevice);
+    get_property_u32(system_object_id(), &address)
         .filter(|&id| id != 0)
         .and_then(get_device_name)
         .unwrap_or_else(|| String::from("Microphone"))
@@ -289,21 +218,13 @@ pub fn get_default_input_device_name() -> String {
 
 /// Returns the persistent UID string for the given CoreAudio device ID.
 pub fn get_device_uid(device_id: u32) -> Option<String> {
-    let address = AudioObjectPropertyAddress {
-        mSelector: kAudioDevicePropertyDeviceUID,
-        mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain,
-    };
-    get_cfstring_property(device_id, &address)
+    let address = global_address(kAudioDevicePropertyDeviceUID);
+    get_property_cfstring(device_id, &address)
 }
 
 /// Lists all active output audio devices on the system (excluding internal process tap aggregates).
 pub fn list_output_devices() -> Vec<OutputDeviceInfo> {
-    let address = AudioObjectPropertyAddress {
-        mSelector: kAudioHardwarePropertyDevices,
-        mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain,
-    };
+    let address = global_address(kAudioHardwarePropertyDevices);
 
     let mut data_size: u32 = 0;
     let status = unsafe {
@@ -432,11 +353,7 @@ pub fn set_device_mute(device_id: u32, muted: bool) -> Result<(), String> {
 
 /// Sets the system default output device.
 pub fn set_default_output_device(device_id: u32) -> Result<(), String> {
-    let address = AudioObjectPropertyAddress {
-        mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-        mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain,
-    };
+    let address = global_address(kAudioHardwarePropertyDefaultOutputDevice);
     set_u32_property(system_object_id(), &address, device_id)
 }
 

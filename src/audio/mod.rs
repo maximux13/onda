@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+mod core_audio;
 pub mod discovery;
 pub mod master;
 pub mod tap;
