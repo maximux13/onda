@@ -30,6 +30,22 @@ fn main() {
             tray::set_accessory_activation_policy();
 
             let engine = Arc::new(Mutex::new(AudioEngine::new()));
+            let updater = Arc::new(Mutex::new(updater::UpdateController::new(
+                updater::UpdateConfig::from_env(),
+            )));
+            let _updater_for_ui = Arc::clone(&updater);
+
+            let updater_bg = Arc::clone(&updater);
+            cx.spawn(async move |cx| {
+                cx.background_executor().timer(Duration::from_secs(3)).await;
+                loop {
+                    updater::UpdateController::trigger_check(Arc::clone(&updater_bg));
+                    cx.background_executor()
+                        .timer(Duration::from_secs(6 * 3600))
+                        .await;
+                }
+            })
+            .detach();
             let (tray_handle, tray_rx) = match tray::init_tray() {
                 Ok(res) => res,
                 Err(err) => {

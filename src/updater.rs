@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 pub const REPO_OWNER: &str = "maximux13";
 pub const REPO_NAME: &str = "onda";
@@ -190,6 +191,87 @@ pub fn relaunch_app(app_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Thread-safe coordinator for background update checks and downloads.
+pub struct UpdateController {
+    config: UpdateConfig,
+    state: UpdateState,
+}
+
+impl UpdateController {
+    pub fn new(config: UpdateConfig) -> Self {
+        Self {
+            config,
+            state: UpdateState::Idle,
+        }
+    }
+
+    pub fn state(&self) -> UpdateState {
+        self.state.clone()
+    }
+
+    /// Spawns a background thread to check GitHub Releases if not already checking/downloading.
+    pub fn trigger_check(controller: Arc<Mutex<Self>>) {
+        let config = {
+            let Ok(mut guard) = controller.lock() else {
+                return;
+            };
+            if matches!(
+                guard.state,
+                UpdateState::Checking | UpdateState::Downloading { .. }
+            ) {
+                return;
+            }
+            guard.state = UpdateState::Checking;
+            guard.config.clone()
+        };
+
+        std::thread::spawn(move || {
+            let next_state = match check_for_updates(&config) {
+                Ok(Some(info)) => UpdateState::Available(info),
+                Ok(None) => UpdateState::UpToDate,
+                Err(err) => UpdateState::Error(err),
+            };
+            if let Ok(mut guard) = controller.lock() {
+                guard.state = next_state;
+            }
+        });
+    }
+
+    /// Spawns a background thread to download and replace `Onda.app`.
+    pub fn trigger_download(controller: Arc<Mutex<Self>>) {
+        let (config, target_version) = {
+            let Ok(mut guard) = controller.lock() else {
+                return;
+            };
+            let version = match &guard.state {
+                UpdateState::Available(info) => info.version.clone(),
+                _ => return,
+            };
+            guard.state = UpdateState::Downloading {
+                version: version.clone(),
+            };
+            (guard.config.clone(), version)
+        };
+
+        std::thread::spawn(move || {
+            let next_state = match download_and_install_update(&config) {
+                Ok((installed_version, app_path)) => UpdateState::ReadyToRestart {
+                    version: if installed_version.is_empty() {
+                        target_version
+                    } else {
+                        installed_version
+                    },
+                    app_path,
+                },
+                Err(err) => UpdateState::Error(err),
+            };
+            if let Ok(mut guard) = controller.lock() {
+                guard.state = next_state;
+            }
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,5 +419,32 @@ mod tests {
         assert_eq!(updated_bin, b"new-binary-v0.2.0");
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn controller_transitions_from_idle_to_available_on_check() {
+        let zip_bytes = build_minimal_zip_with_app("Onda.app", b"bin");
+        let (base_url, _server) = spawn_mock_github_server("v0.3.0", zip_bytes);
+
+        let controller = Arc::new(Mutex::new(UpdateController::new(UpdateConfig {
+            current_version: "0.1.0".to_string(),
+            api_base_url: Some(base_url),
+            ..UpdateConfig::default()
+        })));
+
+        UpdateController::trigger_check(Arc::clone(&controller));
+
+        // Poll briefly for background thread completion in test
+        for _ in 0..50 {
+            if let UpdateState::Available(info) = controller.lock().unwrap().state() {
+                assert_eq!(info.version, "0.3.0");
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!(
+            "UpdateController did not reach Available state: {:?}",
+            controller.lock().unwrap().state()
+        );
     }
 }
