@@ -311,6 +311,43 @@ impl TrayPopoverView {
             )
     }
 
+    fn render_apps_filter_bar(
+        &self,
+        palette: ThemePalette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let show_all = self.snapshot.show_all_apps;
+        div()
+            .w_full()
+            .px(px(2.0))
+            .py(px(2.0))
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(palette.text_secondary)
+                    .child("Show all open apps"),
+            )
+            .child(self.render_ios_toggle(
+                "mixer-show-all-apps-toggle",
+                show_all,
+                palette,
+                |this, _event, _window, cx| {
+                    let next = !this.snapshot.show_all_apps;
+                    if let Ok(mut engine) = this.engine.lock() {
+                        engine.set_show_all_apps(next);
+                        this.snapshot = engine.snapshot();
+                    }
+                    this.sync_icon_cache();
+                    cx.notify();
+                },
+                cx,
+            ))
+    }
+
     /// Renders View 1: Main `Onda` view.
     pub(super) fn render_mixer_view(
         &self,
@@ -320,6 +357,11 @@ impl TrayPopoverView {
         let mut apps_list = div().w_full().flex().flex_col().gap(px(4.0));
 
         if self.snapshot.apps.is_empty() {
+            let empty_msg = if self.snapshot.show_all_apps {
+                "No open applications found"
+            } else {
+                "No applications are currently playing audio"
+            };
             apps_list = apps_list.child(
                 div()
                     .w_full()
@@ -334,10 +376,26 @@ impl TrayPopoverView {
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(palette.text_secondary)
-                    .child("No applications are currently playing audio"),
+                    .child(empty_msg),
             );
         } else {
+            let has_active = self.snapshot.apps.iter().any(|r| r.info.is_running_output);
+            let mut rendered_idle_header = false;
             for row in &self.snapshot.apps {
+                if has_active && !row.info.is_running_output && !rendered_idle_header {
+                    rendered_idle_header = true;
+                    apps_list = apps_list.child(
+                        div()
+                            .w_full()
+                            .px(px(2.0))
+                            .pt(px(6.0))
+                            .pb(px(2.0))
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(palette.text_secondary)
+                            .child("Other open apps"),
+                    );
+                }
                 apps_list = apps_list.child(self.render_app_row(row, palette, cx));
             }
         }
@@ -364,6 +422,7 @@ impl TrayPopoverView {
             .gap(px(6.0))
             .child(self.render_mixer_header(palette, cx))
             .child(div().w_full().h(px(1.0)).bg(palette.divider))
+            .child(self.render_apps_filter_bar(palette, cx))
             .child(scroll_area)
             .child(div().w_full().h(px(1.0)).bg(palette.divider))
             .child(self.render_equalizer_section(palette, cx))

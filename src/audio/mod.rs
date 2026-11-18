@@ -58,7 +58,7 @@ pub trait AudioBackend {
     fn set_default_output_device(&self, device_id: u32);
     fn set_device_volume(&self, device_id: u32, volume: f32);
     fn set_device_mute(&self, device_id: u32, muted: bool);
-    fn list_audio_processes(&self) -> Vec<AudioAppInfo>;
+    fn list_audio_processes(&self, include_inactive: bool) -> Vec<AudioAppInfo>;
     fn create_process_tap(
         &self,
         object_ids: &[u32],
@@ -105,8 +105,8 @@ impl AudioBackend for CoreAudioBackend {
         let _ = master::set_device_mute(device_id, muted);
     }
 
-    fn list_audio_processes(&self) -> Vec<AudioAppInfo> {
-        discovery::list_audio_processes()
+    fn list_audio_processes(&self, include_inactive: bool) -> Vec<AudioAppInfo> {
+        discovery::list_audio_processes(include_inactive)
     }
 
     fn create_process_tap(
@@ -285,7 +285,7 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
     pub fn snapshot(&mut self) -> MixerSnapshot {
         let devices = self.backend.list_output_devices();
         let default_input_name = self.backend.default_input_device_name();
-        let processes = self.backend.list_audio_processes();
+        let processes = self.backend.list_audio_processes(self.prefs.show_all_apps);
 
         let default_dev = devices
             .iter()
@@ -304,12 +304,17 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
 
         self.last_object_ids.clear();
         for proc in &processes {
-            self.last_object_ids
-                .insert(proc.bundle_id.clone(), proc.object_ids.clone());
+            if proc.is_running_output {
+                self.last_object_ids
+                    .insert(proc.bundle_id.clone(), proc.object_ids.clone());
+            }
         }
 
-        let active_bundle_ids: HashSet<&str> =
-            processes.iter().map(|p| p.bundle_id.as_str()).collect();
+        let active_bundle_ids: HashSet<&str> = processes
+            .iter()
+            .filter(|p| p.is_running_output)
+            .map(|p| p.bundle_id.as_str())
+            .collect();
         self.taps
             .retain(|bundle_id, _| active_bundle_ids.contains(bundle_id.as_str()));
 
@@ -321,7 +326,9 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
                 .cloned()
                 .unwrap_or_default();
 
-            self.ensure_tap(&proc.bundle_id, &config);
+            if proc.is_running_output {
+                self.ensure_tap(&proc.bundle_id, &config);
+            }
 
             let peak_level = self
                 .taps
@@ -363,6 +370,7 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
             max_volume_limit: self.prefs.max_volume_limit,
             restore_on_close: self.prefs.restore_on_close,
             show_in_menu_bar: self.prefs.show_in_menu_bar,
+            show_all_apps: self.prefs.show_all_apps,
             global_eq_enabled: self.prefs.global_eq_enabled,
             global_eq_gains: self.prefs.global_eq_gains,
             selected_eq_app: self.selected_eq_app.clone(),
@@ -490,6 +498,12 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
     /// Sets the normalized glass opacity slider value (`0.0..=1.0`) and persists preferences.
     pub fn set_glass_opacity(&mut self, opacity: f32) {
         self.prefs.glass_opacity = opacity.clamp(0.0, 1.0);
+        self.save_prefs();
+    }
+
+    /// Toggles whether inactive open applications are included in the mixer list.
+    pub fn set_show_all_apps(&mut self, show: bool) {
+        self.prefs.show_all_apps = show;
         self.save_prefs();
     }
 
@@ -651,8 +665,13 @@ mod tests {
         fn set_device_volume(&self, _device_id: u32, _volume: f32) {}
         fn set_device_mute(&self, _device_id: u32, _muted: bool) {}
 
-        fn list_audio_processes(&self) -> Vec<AudioAppInfo> {
-            self.processes.borrow().clone()
+        fn list_audio_processes(&self, include_inactive: bool) -> Vec<AudioAppInfo> {
+            self.processes
+                .borrow()
+                .iter()
+                .filter(|p| p.is_running_output || include_inactive)
+                .cloned()
+                .collect()
         }
 
         fn create_process_tap(
@@ -723,6 +742,53 @@ mod tests {
         let snap2 = engine.snapshot();
         assert!(snap2.apps.is_empty());
         assert!(backend.created_taps.borrow()[0].borrow().dropped);
+    }
+
+    #[test]
+    fn snapshot_should_include_inactive_apps_without_taps_and_apply_preconfigured_volume() {
+        let mut inactive = make_app("com.apple.Safari", "Safari", vec![]);
+        inactive.is_running_output = false;
+
+        let backend = FakeBackend::with_devices_and_processes(
+            vec![make_device(1, "uid-default", "Speakers", true)],
+            vec![
+                make_app("com.spotify.client", "Spotify", vec![10]),
+                inactive,
+            ],
+        );
+        let store = MemoryStore::default();
+        let mut engine = AudioEngine::with_backend_and_store(backend.clone(), store);
+
+        // Default: only active apps are shown.
+        let snap_active_only = engine.snapshot();
+        assert_eq!(snap_active_only.apps.len(), 1);
+        assert_eq!(
+            snap_active_only.apps[0].info.bundle_id,
+            "com.spotify.client"
+        );
+        assert!(!snap_active_only.show_all_apps);
+
+        // Enable showing all open apps: Safari appears, but no tap is created for it yet.
+        engine.set_show_all_apps(true);
+        let snap_all = engine.snapshot();
+        assert!(snap_all.show_all_apps);
+        assert_eq!(snap_all.apps.len(), 2);
+        assert_eq!(backend.created_taps.borrow().len(), 1);
+
+        // Pre-configure Safari's volume while it is idle.
+        engine.set_app_volume("com.apple.Safari", 0.45);
+        assert_eq!(backend.created_taps.borrow().len(), 1);
+
+        // Once Safari starts playing audio, its tap is created with the pre-configured volume.
+        {
+            let mut procs = backend.processes.borrow_mut();
+            procs[1].is_running_output = true;
+            procs[1].object_ids = vec![20];
+        }
+        let snap_playing = engine.snapshot();
+        assert_eq!(snap_playing.apps.len(), 2);
+        assert_eq!(backend.created_taps.borrow().len(), 2);
+        assert!((backend.created_taps.borrow()[1].borrow().volume - 0.45).abs() < 1e-4);
     }
 
     #[test]

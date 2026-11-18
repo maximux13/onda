@@ -104,7 +104,7 @@ impl TrayPopoverView {
         cx.notify();
     }
 
-    fn sync_icon_cache(&mut self) {
+    pub(super) fn sync_icon_cache(&mut self) {
         for app in &self.snapshot.apps {
             if !self.icon_cache.contains_key(&app.info.bundle_id)
                 && let Some(bytes) = &app.info.icon_png

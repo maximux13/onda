@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::ptr::{self, NonNull};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
+use objc2_app_kit::{NSApplicationActivationPolicy, NSWorkspace};
 use objc2_core_audio::{
     AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize, AudioObjectID,
     kAudioHardwarePropertyProcessObjectList, kAudioProcessPropertyBundleID,
@@ -86,9 +89,103 @@ fn parent_pid(pid: i32) -> Option<i32> {
     }
 }
 
+fn sort_audio_apps(apps: &mut [AudioAppInfo]) {
+    apps.sort_by(|a, b| {
+        b.is_running_output
+            .cmp(&a.is_running_output)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+}
+
+const OPEN_APPS_CACHE_TTL: Duration = Duration::from_millis(1500);
+
+const IGNORED_IDLE_BUNDLE_IDS: &[&str] = &[
+    "com.apple.finder",
+    "com.apple.systempreferences",
+    "com.apple.ActivityMonitor",
+];
+
+fn is_ignored_idle_bundle_id(bundle_id: &str) -> bool {
+    IGNORED_IDLE_BUNDLE_IDS.contains(&bundle_id)
+}
+
+type OpenAppsCache = Mutex<Option<(Instant, Vec<AudioAppInfo>)>>;
+
+fn open_gui_apps_cache() -> &'static OpenAppsCache {
+    static CACHE: OnceLock<OpenAppsCache> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn collect_open_gui_apps(self_pid: i32) -> Vec<AudioAppInfo> {
+    if let Ok(guard) = open_gui_apps_cache().lock()
+        && let Some((captured_at, cached)) = guard.as_ref()
+        && captured_at.elapsed() < OPEN_APPS_CACHE_TTL
+    {
+        return cached.clone();
+    }
+
+    let workspace = NSWorkspace::sharedWorkspace();
+    let running_apps = workspace.runningApplications();
+    let mut apps = Vec::new();
+
+    for app in running_apps {
+        if app.isTerminated() {
+            continue;
+        }
+        let pid = app.processIdentifier();
+        if pid == self_pid || pid <= 0 {
+            continue;
+        }
+        if app.activationPolicy() != NSApplicationActivationPolicy::Regular {
+            continue;
+        }
+        let Some(bundle_id) = app
+            .bundleIdentifier()
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        if is_ignored_idle_bundle_id(&bundle_id) {
+            continue;
+        }
+
+        let name = app
+            .localizedName()
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| fallback_name_from_bundle_id(&bundle_id));
+        let (icon_png, dominant_color) = get_or_extract_app_icon(&bundle_id, &name, pid);
+
+        apps.push(AudioAppInfo {
+            object_ids: Vec::new(),
+            bundle_id,
+            name,
+            is_running_output: false,
+            icon_png,
+            dominant_color,
+        });
+    }
+
+    if let Ok(mut guard) = open_gui_apps_cache().lock() {
+        *guard = Some((Instant::now(), apps.clone()));
+    }
+
+    apps
+}
+
+fn append_open_gui_apps(grouped: &mut HashMap<String, AudioAppInfo>, self_pid: i32) {
+    for app in collect_open_gui_apps(self_pid) {
+        grouped.entry(app.bundle_id.clone()).or_insert(app);
+    }
+}
+
 /// Lists running macOS applications currently outputting audio, grouping helper
 /// subprocesses (such as Chromium/Brave audio helpers) under their parent app.
-pub fn list_audio_processes() -> Vec<AudioAppInfo> {
+/// When `include_inactive` is `true`, also includes other open GUI applications
+/// (`NSApplicationActivationPolicy::Regular`) so their audio settings can be pre-configured.
+pub fn list_audio_processes(include_inactive: bool) -> Vec<AudioAppInfo> {
     let self_pid = std::process::id() as i32;
     let object_ids = get_process_object_ids();
     let mut grouped: HashMap<String, AudioAppInfo> = HashMap::new();
@@ -141,13 +238,61 @@ pub fn list_audio_processes() -> Vec<AudioAppInfo> {
         );
     }
 
+    if include_inactive {
+        append_open_gui_apps(&mut grouped, self_pid);
+    }
+
     let mut apps: Vec<AudioAppInfo> = grouped.into_values().collect();
-    apps.sort_by(|a, b| {
-        a.name
-            .to_lowercase()
-            .cmp(&b.name.to_lowercase())
-            .then_with(|| a.name.cmp(&b.name))
-    });
+    sort_audio_apps(&mut apps);
 
     apps
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app(name: &str, is_running_output: bool) -> AudioAppInfo {
+        AudioAppInfo {
+            object_ids: if is_running_output { vec![1] } else { vec![] },
+            bundle_id: format!("com.example.{name}"),
+            name: name.to_string(),
+            is_running_output,
+            icon_png: None,
+            dominant_color: 0,
+        }
+    }
+
+    #[test]
+    fn sort_audio_apps_should_place_active_apps_before_inactive_alphabetically() {
+        let mut apps = vec![
+            app("Zoom", false),
+            app("Spotify", true),
+            app("Finder", false),
+            app("Arc", true),
+        ];
+
+        sort_audio_apps(&mut apps);
+
+        let ordered: Vec<(&str, bool)> = apps
+            .iter()
+            .map(|a| (a.name.as_str(), a.is_running_output))
+            .collect();
+        assert_eq!(
+            ordered,
+            vec![
+                ("Arc", true),
+                ("Spotify", true),
+                ("Finder", false),
+                ("Zoom", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn ignored_idle_bundle_ids_filters_system_utilities() {
+        assert!(is_ignored_idle_bundle_id("com.apple.finder"));
+        assert!(is_ignored_idle_bundle_id("com.apple.systempreferences"));
+        assert!(!is_ignored_idle_bundle_id("com.spotify.client"));
+    }
 }

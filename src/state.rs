@@ -53,7 +53,7 @@ pub struct OutputDeviceInfo {
     pub muted: bool,
 }
 
-/// Metadata for a running macOS application with active audio output.
+/// Metadata for a running macOS application (with or without active audio output).
 #[derive(Clone, Debug)]
 pub struct AudioAppInfo {
     pub object_ids: Vec<u32>,
@@ -146,6 +146,7 @@ pub struct MixerSnapshot {
     pub max_volume_limit: f32,
     pub restore_on_close: bool,
     pub show_in_menu_bar: bool,
+    pub show_all_apps: bool,
     pub global_eq_enabled: bool,
     pub global_eq_gains: [f32; 10],
     /// Selected app `bundle_id` for the equalizer (`None` = Global Equalizer).
@@ -165,6 +166,7 @@ impl Default for MixerSnapshot {
             max_volume_limit: 2.0,
             restore_on_close: false,
             show_in_menu_bar: true,
+            show_all_apps: false,
             global_eq_enabled: true,
             global_eq_gains: [0.0; 10],
             selected_eq_app: None,
@@ -187,6 +189,8 @@ pub struct Preferences {
     pub restore_on_close: bool,
     #[serde(default = "default_true")]
     pub show_in_menu_bar: bool,
+    #[serde(default)]
+    pub show_all_apps: bool,
     #[serde(default = "default_true")]
     pub global_eq_enabled: bool,
     #[serde(default = "default_eq_gains")]
@@ -204,6 +208,7 @@ impl Default for Preferences {
             max_volume_limit: 2.0,
             restore_on_close: false,
             show_in_menu_bar: true,
+            show_all_apps: false,
             global_eq_enabled: true,
             global_eq_gains: [0.0; 10],
             apps: HashMap::new(),

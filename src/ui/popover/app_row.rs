@@ -361,6 +361,11 @@ impl TrayPopoverView {
         let boost_enabled = row.config.boost_enabled;
 
         if self.advanced_mode {
+            let route_label = if row.info.is_running_output {
+                row.routed_device_name.clone()
+            } else {
+                format!("{} · Idle", row.routed_device_name)
+            };
             name_col = name_col.child(
                 div()
                     .id(SharedString::from(format!("app-route-sub-{bundle_id}")))
@@ -376,7 +381,15 @@ impl TrayPopoverView {
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.toggle_routing_picker(&bundle_for_route, cx);
                     }))
-                    .child(row.routed_device_name.clone()),
+                    .child(route_label),
+            );
+        } else if !row.info.is_running_output {
+            name_col = name_col.child(
+                div()
+                    .truncate()
+                    .text_xs()
+                    .text_color(palette.text_secondary)
+                    .child("Idle"),
             );
         }
 
