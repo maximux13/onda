@@ -10,23 +10,138 @@ pub mod tap;
 use std::collections::{HashMap, HashSet};
 
 use crate::state::{
-    AppRowState, AppVolumeConfig, DeviceIconKind, MixerSnapshot, Preferences, ThemeMode,
-    WindowStyle,
+    AppRowState, AppVolumeConfig, AudioAppInfo, DeviceIconKind, MixerSnapshot, OutputDeviceInfo,
+    Preferences, ThemeMode, WindowStyle,
 };
 use crate::storage::{JsonFileStore, PreferencesStore};
 use tap::AppTapHandle;
 
-struct ActiveTap {
-    handle: AppTapHandle,
+/// Controls an active per-application audio process tap.
+pub trait TapController {
+    fn set_volume(&self, volume: f32);
+    fn set_muted(&self, muted: bool);
+    fn set_eq(&self, enabled: bool, gains_db: &[f32; 10]);
+    fn peak_level(&self) -> f32;
+    fn output_device_uid(&self) -> &str;
+}
+
+impl TapController for AppTapHandle {
+    fn set_volume(&self, volume: f32) {
+        AppTapHandle::set_volume(self, volume);
+    }
+
+    fn set_muted(&self, muted: bool) {
+        AppTapHandle::set_muted(self, muted);
+    }
+
+    fn set_eq(&self, enabled: bool, gains_db: &[f32; 10]) {
+        AppTapHandle::set_eq(self, enabled, gains_db);
+    }
+
+    fn peak_level(&self) -> f32 {
+        AppTapHandle::peak_level(self)
+    }
+
+    fn output_device_uid(&self) -> &str {
+        &self.output_device_uid
+    }
+}
+
+/// Hardware/OS audio backend abstraction used by [`AudioEngine`].
+pub trait AudioBackend {
+    type Tap: TapController;
+
+    fn list_output_devices(&self) -> Vec<OutputDeviceInfo>;
+    fn default_input_device_name(&self) -> String;
+    fn default_output_device_uid(&self) -> Option<String>;
+    fn fallback_master_name(&self) -> String;
+    fn set_default_output_device(&self, device_id: u32);
+    fn set_device_volume(&self, device_id: u32, volume: f32);
+    fn set_device_mute(&self, device_id: u32, muted: bool);
+    fn list_audio_processes(&self) -> Vec<AudioAppInfo>;
+    fn create_process_tap(
+        &self,
+        object_ids: &[u32],
+        output_device_uid: &str,
+        volume: f32,
+        muted: bool,
+        eq_enabled: bool,
+        eq_gains: &[f32; 10],
+    ) -> Result<Self::Tap, String>;
+}
+
+/// Production [`AudioBackend`] backed by macOS Core Audio.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct CoreAudioBackend;
+
+impl AudioBackend for CoreAudioBackend {
+    type Tap = AppTapHandle;
+
+    fn list_output_devices(&self) -> Vec<OutputDeviceInfo> {
+        master::list_output_devices()
+    }
+
+    fn default_input_device_name(&self) -> String {
+        master::get_default_input_device_name()
+    }
+
+    fn default_output_device_uid(&self) -> Option<String> {
+        master::get_default_output_device().and_then(master::get_device_uid)
+    }
+
+    fn fallback_master_name(&self) -> String {
+        master::get_master_state().device_name
+    }
+
+    fn set_default_output_device(&self, device_id: u32) {
+        let _ = master::set_default_output_device(device_id);
+    }
+
+    fn set_device_volume(&self, device_id: u32, volume: f32) {
+        let _ = master::set_device_volume(device_id, volume);
+    }
+
+    fn set_device_mute(&self, device_id: u32, muted: bool) {
+        let _ = master::set_device_mute(device_id, muted);
+    }
+
+    fn list_audio_processes(&self) -> Vec<AudioAppInfo> {
+        discovery::list_audio_processes()
+    }
+
+    fn create_process_tap(
+        &self,
+        object_ids: &[u32],
+        output_device_uid: &str,
+        volume: f32,
+        muted: bool,
+        eq_enabled: bool,
+        eq_gains: &[f32; 10],
+    ) -> Result<Self::Tap, String> {
+        tap::create_process_tap(
+            object_ids,
+            output_device_uid,
+            volume,
+            muted,
+            eq_enabled,
+            eq_gains,
+        )
+        .map_err(|err| err.to_string())
+    }
+}
+
+struct ActiveTap<T: TapController> {
+    handle: T,
     object_ids: Vec<u32>,
 }
 
 /// Coordinates Core Audio discovery, output device controls, per-app process taps,
 /// real-time 10-band peaking EQ, peak metering, and persisted preferences.
-pub struct AudioEngine {
-    store: JsonFileStore,
+pub struct AudioEngine<B: AudioBackend = CoreAudioBackend, S: PreferencesStore = JsonFileStore> {
+    backend: B,
+    store: S,
     prefs: Preferences,
-    taps: HashMap<String, ActiveTap>,
+    taps: HashMap<String, ActiveTap<B::Tap>>,
     configs: HashMap<String, AppVolumeConfig>,
     last_object_ids: HashMap<String, Vec<u32>>,
     last_output_uid: Option<String>,
@@ -34,12 +149,28 @@ pub struct AudioEngine {
     selected_eq_app: Option<String>,
 }
 
-impl AudioEngine {
+/// Default [`AudioEngine`] specialization wired to Core Audio and JSON file persistence.
+pub type DefaultAudioEngine = AudioEngine<CoreAudioBackend, JsonFileStore>;
+
+impl AudioEngine<CoreAudioBackend, JsonFileStore> {
     pub fn new() -> Self {
-        let store = JsonFileStore::default();
+        Self::with_backend_and_store(CoreAudioBackend, JsonFileStore::default())
+    }
+}
+
+impl Default for AudioEngine<CoreAudioBackend, JsonFileStore> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
+    /// Creates an [`AudioEngine`] with explicit backend and preferences store implementations.
+    pub fn with_backend_and_store(backend: B, store: S) -> Self {
         let prefs = store.load();
         let configs = prefs.apps.clone();
         Self {
+            backend,
             store,
             prefs,
             taps: HashMap::new(),
@@ -104,7 +235,7 @@ impl AudioEngine {
 
         let needs_recreate = match self.taps.get(bundle_id) {
             Some(existing)
-                if existing.handle.output_device_uid == uid
+                if existing.handle.output_device_uid() == uid
                     && existing.object_ids == *object_ids =>
             {
                 existing.handle.set_volume(effective_volume);
@@ -117,7 +248,7 @@ impl AudioEngine {
 
         if needs_recreate {
             self.taps.remove(bundle_id);
-            match tap::create_process_tap(
+            match self.backend.create_process_tap(
                 object_ids,
                 &uid,
                 effective_volume,
@@ -152,9 +283,9 @@ impl AudioEngine {
     /// Fetches the latest output devices, input device name, and active audio processes,
     /// reconciles per-app process taps, and returns a full [`MixerSnapshot`] for the UI.
     pub fn snapshot(&mut self) -> MixerSnapshot {
-        let devices = master::list_output_devices();
-        let default_input_name = master::get_default_input_device_name();
-        let processes = discovery::list_audio_processes();
+        let devices = self.backend.list_output_devices();
+        let default_input_name = self.backend.default_input_device_name();
+        let processes = self.backend.list_audio_processes();
 
         let default_dev = devices
             .iter()
@@ -163,11 +294,11 @@ impl AudioEngine {
 
         let default_output_name = default_dev
             .map(|d| d.name.clone())
-            .unwrap_or_else(|| master::get_master_state().device_name);
+            .unwrap_or_else(|| self.backend.fallback_master_name());
 
         self.last_output_uid = default_dev
             .map(|d| d.uid.clone())
-            .or_else(|| master::get_default_output_device().and_then(master::get_device_uid));
+            .or_else(|| self.backend.default_output_device_uid());
 
         self.last_device_uids = devices.iter().map(|d| d.uid.clone()).collect();
 
@@ -238,11 +369,11 @@ impl AudioEngine {
     }
 
     pub fn set_device_volume(&mut self, device_id: u32, volume: f32) {
-        let _ = master::set_device_volume(device_id, volume);
+        self.backend.set_device_volume(device_id, volume);
     }
 
     pub fn set_device_mute(&mut self, device_id: u32, muted: bool) {
-        let _ = master::set_device_mute(device_id, muted);
+        self.backend.set_device_mute(device_id, muted);
     }
 
     fn update_app_config(&mut self, bundle_id: &str, update: impl FnOnce(&mut AppVolumeConfig)) {
@@ -258,7 +389,7 @@ impl AudioEngine {
     }
 
     pub fn set_default_output_device(&mut self, device_id: u32) {
-        let _ = master::set_default_output_device(device_id);
+        self.backend.set_default_output_device(device_id);
     }
 
     pub fn set_app_volume(&mut self, bundle_id: &str, volume: f32) {
@@ -402,5 +533,315 @@ impl AudioEngine {
 
     pub fn set_master_mute(&mut self, muted: bool) {
         let _ = master::set_master_mute(muted);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::StorageError;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[derive(Default, Clone)]
+    struct MemoryStore {
+        prefs: Rc<RefCell<Preferences>>,
+    }
+
+    impl PreferencesStore for MemoryStore {
+        fn load(&self) -> Preferences {
+            self.prefs.borrow().clone()
+        }
+
+        fn save(&self, prefs: &Preferences) -> Result<(), StorageError> {
+            *self.prefs.borrow_mut() = prefs.clone();
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    struct FakeTapState {
+        output_device_uid: String,
+        volume: f32,
+        muted: bool,
+        eq_enabled: bool,
+        eq_gains: [f32; 10],
+        peak_level: f32,
+        dropped: bool,
+    }
+
+    struct FakeTap {
+        state: Rc<RefCell<FakeTapState>>,
+        output_device_uid: String,
+    }
+
+    impl Drop for FakeTap {
+        fn drop(&mut self) {
+            self.state.borrow_mut().dropped = true;
+        }
+    }
+
+    impl TapController for FakeTap {
+        fn set_volume(&self, volume: f32) {
+            self.state.borrow_mut().volume = volume;
+        }
+
+        fn set_muted(&self, muted: bool) {
+            self.state.borrow_mut().muted = muted;
+        }
+
+        fn set_eq(&self, enabled: bool, gains_db: &[f32; 10]) {
+            let mut state = self.state.borrow_mut();
+            state.eq_enabled = enabled;
+            state.eq_gains = *gains_db;
+        }
+
+        fn peak_level(&self) -> f32 {
+            self.state.borrow().peak_level
+        }
+
+        fn output_device_uid(&self) -> &str {
+            &self.output_device_uid
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct FakeBackend {
+        devices: Rc<RefCell<Vec<OutputDeviceInfo>>>,
+        processes: Rc<RefCell<Vec<AudioAppInfo>>>,
+        created_taps: Rc<RefCell<Vec<Rc<RefCell<FakeTapState>>>>>,
+    }
+
+    impl FakeBackend {
+        fn with_devices_and_processes(
+            devices: Vec<OutputDeviceInfo>,
+            processes: Vec<AudioAppInfo>,
+        ) -> Self {
+            Self {
+                devices: Rc::new(RefCell::new(devices)),
+                processes: Rc::new(RefCell::new(processes)),
+                created_taps: Rc::new(RefCell::new(Vec::new())),
+            }
+        }
+    }
+
+    impl AudioBackend for FakeBackend {
+        type Tap = FakeTap;
+
+        fn list_output_devices(&self) -> Vec<OutputDeviceInfo> {
+            self.devices.borrow().clone()
+        }
+
+        fn default_input_device_name(&self) -> String {
+            "Built-in Mic".to_string()
+        }
+
+        fn default_output_device_uid(&self) -> Option<String> {
+            self.devices
+                .borrow()
+                .iter()
+                .find(|d| d.is_default)
+                .map(|d| d.uid.clone())
+        }
+
+        fn fallback_master_name(&self) -> String {
+            "No Output".to_string()
+        }
+
+        fn set_default_output_device(&self, _device_id: u32) {}
+        fn set_device_volume(&self, _device_id: u32, _volume: f32) {}
+        fn set_device_mute(&self, _device_id: u32, _muted: bool) {}
+
+        fn list_audio_processes(&self) -> Vec<AudioAppInfo> {
+            self.processes.borrow().clone()
+        }
+
+        fn create_process_tap(
+            &self,
+            _object_ids: &[u32],
+            output_device_uid: &str,
+            volume: f32,
+            muted: bool,
+            eq_enabled: bool,
+            eq_gains: &[f32; 10],
+        ) -> Result<Self::Tap, String> {
+            let state = Rc::new(RefCell::new(FakeTapState {
+                output_device_uid: output_device_uid.to_string(),
+                volume,
+                muted,
+                eq_enabled,
+                eq_gains: *eq_gains,
+                peak_level: 0.25,
+                dropped: false,
+            }));
+            self.created_taps.borrow_mut().push(state.clone());
+            Ok(FakeTap {
+                state,
+                output_device_uid: output_device_uid.to_string(),
+            })
+        }
+    }
+
+    fn make_device(id: u32, uid: &str, name: &str, is_default: bool) -> OutputDeviceInfo {
+        OutputDeviceInfo {
+            id,
+            uid: uid.to_string(),
+            name: name.to_string(),
+            subtitle: None,
+            icon_kind: DeviceIconKind::Speaker,
+            is_default,
+            volume: 1.0,
+            muted: false,
+        }
+    }
+
+    fn make_app(bundle_id: &str, name: &str, object_ids: Vec<u32>) -> AudioAppInfo {
+        AudioAppInfo {
+            object_ids,
+            bundle_id: bundle_id.to_string(),
+            name: name.to_string(),
+            is_running_output: true,
+            icon_png: None,
+            dominant_color: 0x336699,
+        }
+    }
+
+    #[test]
+    fn snapshot_should_create_tap_for_active_process_and_drop_stale_taps() {
+        let backend = FakeBackend::with_devices_and_processes(
+            vec![make_device(1, "uid-default", "Speakers", true)],
+            vec![make_app("com.spotify.client", "Spotify", vec![10])],
+        );
+        let store = MemoryStore::default();
+        let mut engine = AudioEngine::with_backend_and_store(backend.clone(), store);
+
+        let snap1 = engine.snapshot();
+        assert_eq!(snap1.apps.len(), 1);
+        assert_eq!(backend.created_taps.borrow().len(), 1);
+        assert!(!backend.created_taps.borrow()[0].borrow().dropped);
+
+        backend.processes.borrow_mut().clear();
+        let snap2 = engine.snapshot();
+        assert!(snap2.apps.is_empty());
+        assert!(backend.created_taps.borrow()[0].borrow().dropped);
+    }
+
+    #[test]
+    fn set_app_volume_should_clamp_and_enable_boost_above_one() {
+        let backend = FakeBackend::with_devices_and_processes(
+            vec![make_device(1, "uid-default", "Speakers", true)],
+            vec![make_app("com.spotify.client", "Spotify", vec![10])],
+        );
+        let store = MemoryStore::default();
+        let mut engine = AudioEngine::with_backend_and_store(backend, store.clone());
+        engine.snapshot();
+
+        engine.set_app_volume("com.spotify.client", 1.5);
+        let cfg = store
+            .load()
+            .apps
+            .get("com.spotify.client")
+            .cloned()
+            .unwrap();
+        assert_eq!(cfg.volume, 1.5);
+        assert!(cfg.boost_enabled);
+
+        engine.set_app_volume("com.spotify.client", 3.5);
+        let cfg = store
+            .load()
+            .apps
+            .get("com.spotify.client")
+            .cloned()
+            .unwrap();
+        assert_eq!(cfg.volume, 2.0);
+        assert!(cfg.boost_enabled);
+
+        engine.set_app_volume("com.spotify.client", -0.2);
+        let cfg = store
+            .load()
+            .apps
+            .get("com.spotify.client")
+            .cloned()
+            .unwrap();
+        assert_eq!(cfg.volume, 0.0);
+    }
+
+    #[test]
+    fn set_app_boost_false_should_clamp_volume_back_to_one() {
+        let backend = FakeBackend::with_devices_and_processes(
+            vec![make_device(1, "uid-default", "Speakers", true)],
+            vec![make_app("com.spotify.client", "Spotify", vec![10])],
+        );
+        let store = MemoryStore::default();
+        let mut engine = AudioEngine::with_backend_and_store(backend, store.clone());
+        engine.snapshot();
+
+        engine.set_app_volume("com.spotify.client", 1.75);
+        engine.set_app_boost("com.spotify.client", false);
+
+        let cfg = store
+            .load()
+            .apps
+            .get("com.spotify.client")
+            .cloned()
+            .unwrap();
+        assert!(!cfg.boost_enabled);
+        assert_eq!(cfg.volume, 1.0);
+    }
+
+    #[test]
+    fn effective_eq_should_sum_global_and_app_gains_clamped_to_twelve_db() {
+        let backend = FakeBackend::default();
+        let store = MemoryStore::default();
+        let mut engine = AudioEngine::with_backend_and_store(backend, store);
+
+        engine.select_eq_app(None);
+        engine.set_active_eq_enabled(true);
+        engine.set_active_eq_band(0, 8.0);
+        engine.set_active_eq_band(1, -9.0);
+
+        engine.select_eq_app(Some("com.spotify.client".to_string()));
+        engine.set_active_eq_enabled(true);
+        engine.set_active_eq_band(0, 7.0);
+        engine.set_active_eq_band(1, -6.0);
+
+        let cfg = engine.configs.get("com.spotify.client").unwrap();
+        let (enabled, gains) = engine.effective_eq(cfg);
+        assert!(enabled);
+        assert_eq!(gains[0], 12.0);
+        assert_eq!(gains[1], -12.0);
+    }
+
+    #[test]
+    fn resolve_target_uid_should_fallback_to_default_when_target_device_disconnected() {
+        let backend = FakeBackend::with_devices_and_processes(
+            vec![
+                make_device(1, "uid-default", "Speakers", true),
+                make_device(2, "uid-headphones", "Headphones", false),
+            ],
+            vec![make_app("com.spotify.client", "Spotify", vec![10])],
+        );
+        let store = MemoryStore::default();
+        let mut engine = AudioEngine::with_backend_and_store(backend.clone(), store);
+
+        engine.snapshot();
+        engine.set_app_target_device("com.spotify.client", Some("uid-headphones".to_string()));
+        let cfg = engine.configs.get("com.spotify.client").unwrap();
+        assert_eq!(
+            engine.resolve_target_uid(cfg).as_deref(),
+            Some("uid-headphones")
+        );
+
+        backend
+            .devices
+            .borrow_mut()
+            .retain(|d| d.uid != "uid-headphones");
+        engine.snapshot();
+
+        let cfg = engine.configs.get("com.spotify.client").unwrap();
+        assert_eq!(
+            engine.resolve_target_uid(cfg).as_deref(),
+            Some("uid-default")
+        );
     }
 }
