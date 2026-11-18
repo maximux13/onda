@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+mod app_colors;
+mod app_icons;
 mod core_audio;
 pub mod discovery;
 pub mod master;
