@@ -224,7 +224,13 @@ impl TrayPopoverView {
                     } else {
                         palette.card_border
                     })
-                    .hover(move |s| s.bg(palette.pill_hover_bg))
+                    .hover(move |s| {
+                        if self.show_output_picker {
+                            s.bg(palette.row_selected_bg)
+                        } else {
+                            s.bg(palette.pill_hover_bg)
+                        }
+                    })
                     .cursor_pointer()
                     .flex()
                     .items_center()
@@ -311,7 +317,7 @@ impl TrayPopoverView {
         palette: ThemePalette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let mut apps_list = div().w_full().flex().flex_col().gap(px(2.0));
+        let mut apps_list = div().w_full().flex().flex_col().gap(px(4.0));
 
         if self.snapshot.apps.is_empty() {
             apps_list = apps_list.child(
@@ -343,7 +349,7 @@ impl TrayPopoverView {
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .gap(px(4.0))
+            .gap(px(6.0))
             .child(apps_list);
 
         if self.show_output_picker {

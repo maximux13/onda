@@ -3,13 +3,65 @@ use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, Div, ElementId, MouseButton, Pixels, Point, Window, div, px, relative, rgb, rgba,
+    App, Bounds, Div, ElementId, MouseButton, Pixels, Point, Rgba, Window, div, px, relative, rgb,
+    rgba,
 };
 
 use crate::state::{ThemeMode, WindowStyle};
 use crate::ui::ThemePalette;
 
 type SliderCallback = Rc<dyn Fn(f32, &mut Window, &mut App)>;
+
+struct SliderColors {
+    track: Rgba,
+    track_hover: Rgba,
+    fill: Rgba,
+    thumb: Rgba,
+    thumb_border: Rgba,
+    thumb_hover_bg: Rgba,
+    thumb_hover_border: Rgba,
+}
+
+fn resolve_slider_colors(palette: ThemePalette, active: bool, accent: Rgba) -> SliderColors {
+    let (track_hover, thumb_inactive, thumb_border, thumb_hover_border_inactive) =
+        if palette.is_dark {
+            (
+                rgba(0xffffff36),
+                rgba(0xe2e8f0dd),
+                rgba(0x00000038),
+                rgba(0xffffff66),
+            )
+        } else {
+            (
+                rgba(0x00000024),
+                rgba(0xf8fafce6),
+                rgba(0x181c2e28),
+                rgba(0x181c2e48),
+            )
+        };
+
+    SliderColors {
+        track: palette.slider_track,
+        track_hover,
+        fill: if active {
+            accent
+        } else {
+            palette.slider_muted_fill
+        },
+        thumb: if active {
+            rgb(0xffffff)
+        } else {
+            thumb_inactive
+        },
+        thumb_border,
+        thumb_hover_bg: rgb(0xffffff),
+        thumb_hover_border: if active {
+            accent
+        } else {
+            thumb_hover_border_inactive
+        },
+    }
+}
 
 /// Normalizes a pointer coordinate along an axis within `[start, start + span]` to `[0.0, 1.0]`.
 fn normalized_axis_ratio(pos: Pixels, start: Pixels, span: Pixels) -> Option<f32> {
@@ -110,38 +162,22 @@ impl RenderOnce for VolumeSlider {
         let palette = ThemePalette::for_theme(self.theme, WindowStyle::Transparent);
         let max = self.max.max(0.01);
         let fraction = (self.value / max).clamp(0.0, 1.0);
-
-        let track_color = if palette.is_dark {
-            rgba(0xffffff24)
-        } else {
-            rgba(0x00000018)
-        };
-
-        let fill_color = if self.muted {
-            palette.slider_muted_fill
-        } else {
-            rgb(self.accent_color)
-        };
-
-        let thumb_color = if self.muted {
-            rgba(0xe2e8f0dd)
-        } else {
-            rgb(0xffffff)
-        };
+        let colors = resolve_slider_colors(palette, !self.muted, rgb(self.accent_color));
 
         let mut track = div()
             .relative()
             .w_full()
             .h(px(6.0))
             .rounded_full()
-            .bg(track_color)
+            .bg(colors.track)
+            .hover(move |s| s.bg(colors.track_hover))
             .child(
                 div()
                     .h_full()
                     .w(relative(fraction))
                     .min_w(px(6.0))
                     .rounded_full()
-                    .bg(fill_color),
+                    .bg(colors.fill),
             );
 
         // Subtle unity-gain (100%) marker when slider supports boost amplification (> 1.0).
@@ -164,7 +200,7 @@ impl RenderOnce for VolumeSlider {
             );
         }
 
-        // Always-visible circular white thumb matching the AudioMixer mockup.
+        // Always-visible circular white thumb with subtle border and hover highlight.
         track = track.child(
             div()
                 .absolute()
@@ -173,8 +209,15 @@ impl RenderOnce for VolumeSlider {
                 .ml(px(-8.0))
                 .size(px(16.0))
                 .rounded_full()
-                .bg(thumb_color)
-                .shadow_md(),
+                .bg(colors.thumb)
+                .border_1()
+                .border_color(colors.thumb_border)
+                .shadow_md()
+                .hover(move |s| {
+                    s.bg(colors.thumb_hover_bg)
+                        .border_color(colors.thumb_hover_border)
+                        .shadow_lg()
+                }),
         );
 
         let _ = &self.id;
@@ -230,35 +273,17 @@ impl EqVerticalSlider {
 
 impl RenderOnce for EqVerticalSlider {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let is_dark = ThemePalette::resolve_is_dark(self.theme);
+        let palette = ThemePalette::for_theme(self.theme, WindowStyle::Transparent);
         let ratio = ((self.gain_db + 12.0) / 24.0).clamp(0.0, 1.0);
-
-        let track_color = if is_dark {
-            rgba(0xffffff24)
-        } else {
-            rgba(0x00000018)
-        };
-
-        let fill_color = if self.enabled {
-            rgb(0x2986ff)
-        } else if is_dark {
-            rgba(0xffffff38)
-        } else {
-            rgba(0x8e8e9366)
-        };
-
-        let thumb_color = if self.enabled {
-            rgb(0xffffff)
-        } else {
-            rgba(0xe2e8f0cc)
-        };
+        let colors = resolve_slider_colors(palette, self.enabled, palette.accent_blue);
 
         let track = div()
             .relative()
             .w(px(5.0))
             .h_full()
             .rounded_full()
-            .bg(track_color)
+            .bg(colors.track)
+            .hover(move |s| s.bg(colors.track_hover))
             // Bottom-up blue fill
             .child(
                 div()
@@ -269,9 +294,9 @@ impl RenderOnce for EqVerticalSlider {
                     .h(relative(ratio))
                     .min_h(px(4.0))
                     .rounded_full()
-                    .bg(fill_color),
+                    .bg(colors.fill),
             )
-            // Always-visible 13px white circular thumb
+            // Always-visible 13px white circular thumb with subtle border and hover highlight
             .child(
                 div()
                     .absolute()
@@ -280,8 +305,15 @@ impl RenderOnce for EqVerticalSlider {
                     .mt(px(-6.5))
                     .size(px(13.0))
                     .rounded_full()
-                    .bg(thumb_color)
-                    .shadow_md(),
+                    .bg(colors.thumb)
+                    .border_1()
+                    .border_color(colors.thumb_border)
+                    .shadow_md()
+                    .hover(move |s| {
+                        s.bg(colors.thumb_hover_bg)
+                            .border_color(colors.thumb_hover_border)
+                            .shadow_lg()
+                    }),
             );
 
         let _ = &self.id;
@@ -299,5 +331,93 @@ impl RenderOnce for EqVerticalSlider {
         bind_drag_handlers(container, self.on_change, Some(0.0), |pos, bounds| {
             Self::gain_from_y(pos.y, bounds)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{point, size};
+
+    fn sample_bounds() -> Bounds<Pixels> {
+        Bounds {
+            origin: point(px(10.0), px(20.0)),
+            size: size(px(200.0), px(80.0)),
+        }
+    }
+
+    #[test]
+    fn value_from_x_should_return_zero_when_x_at_or_before_bounds_left() {
+        let bounds = sample_bounds();
+        assert_eq!(VolumeSlider::value_from_x(px(10.0), bounds, 1.5), Some(0.0));
+        assert_eq!(
+            VolumeSlider::value_from_x(px(-25.0), bounds, 1.5),
+            Some(0.0)
+        );
+    }
+
+    #[test]
+    fn value_from_x_should_return_max_when_x_at_or_after_bounds_right() {
+        let bounds = sample_bounds();
+        assert_eq!(
+            VolumeSlider::value_from_x(px(210.0), bounds, 1.5),
+            Some(1.5)
+        );
+        assert_eq!(
+            VolumeSlider::value_from_x(px(500.0), bounds, 1.5),
+            Some(1.5)
+        );
+    }
+
+    #[test]
+    fn value_from_x_should_interpolate_proportionally_when_x_within_bounds() {
+        let bounds = sample_bounds();
+        let mid = VolumeSlider::value_from_x(px(110.0), bounds, 2.0).unwrap();
+        assert!((mid - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn value_from_x_should_return_none_when_bounds_width_non_positive() {
+        let zero_width = Bounds {
+            origin: point(px(10.0), px(20.0)),
+            size: size(px(0.0), px(80.0)),
+        };
+        assert_eq!(VolumeSlider::value_from_x(px(10.0), zero_width, 1.0), None);
+    }
+
+    #[test]
+    fn gain_from_y_should_return_plus_twelve_when_y_at_or_above_bounds_top() {
+        let bounds = sample_bounds();
+        assert_eq!(EqVerticalSlider::gain_from_y(px(20.0), bounds), Some(12.0));
+        assert_eq!(EqVerticalSlider::gain_from_y(px(-5.0), bounds), Some(12.0));
+    }
+
+    #[test]
+    fn gain_from_y_should_return_minus_twelve_when_y_at_or_below_bounds_bottom() {
+        let bounds = sample_bounds();
+        assert_eq!(
+            EqVerticalSlider::gain_from_y(px(100.0), bounds),
+            Some(-12.0)
+        );
+        assert_eq!(
+            EqVerticalSlider::gain_from_y(px(250.0), bounds),
+            Some(-12.0)
+        );
+    }
+
+    #[test]
+    fn gain_from_y_should_return_zero_db_when_y_at_bounds_midpoint() {
+        let bounds = sample_bounds();
+        let gain = EqVerticalSlider::gain_from_y(px(60.0), bounds).unwrap();
+        assert!(gain.abs() < 1e-5);
+    }
+
+    #[test]
+    fn gain_from_y_should_return_none_when_bounds_height_non_positive() {
+        let zero_height = Bounds {
+            origin: point(px(10.0), px(20.0)),
+            size: size(px(200.0), px(0.0)),
+        };
+        assert_eq!(EqVerticalSlider::gain_from_y(px(20.0), zero_height), None);
     }
 }

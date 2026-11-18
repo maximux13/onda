@@ -113,13 +113,13 @@ impl TrayPopoverView {
         ];
 
         let mut meter = div()
-            .w(px(6.0))
-            .h(px(22.0))
+            .w(px(5.0))
+            .h(px(28.0))
             .flex_shrink_0()
             .flex()
             .flex_col_reverse()
-            .justify_between()
-            .gap(px(1.5));
+            .justify_center()
+            .gap(px(2.0));
 
         for i in 0..5 {
             let color = if effective_level >= thresholds[i] {
@@ -127,7 +127,7 @@ impl TrayPopoverView {
             } else {
                 palette.vu_unlit
             };
-            meter = meter.child(div().w_full().h(px(2.5)).rounded(px(1.0)).bg(color));
+            meter = meter.child(div().w_full().h(px(4.0)).rounded_full().bg(color));
         }
 
         meter
@@ -165,6 +165,75 @@ impl TrayPopoverView {
             .into_any_element()
     }
 
+    fn render_routing_option(
+        &self,
+        id: SharedString,
+        label: SharedString,
+        is_selected: bool,
+        palette: ThemePalette,
+        on_click: impl Fn(&mut Self, &gpui::ClickEvent, &mut gpui::Window, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .id(id)
+            .w_full()
+            .px(px(8.0))
+            .py(px(5.0))
+            .rounded(px(8.0))
+            .border_1()
+            .border_color(if is_selected {
+                palette.row_selected_border
+            } else {
+                rgba(0x00000000)
+            })
+            .bg(if is_selected {
+                palette.row_selected_bg
+            } else {
+                rgba(0x00000000)
+            })
+            .hover(move |s| {
+                if is_selected {
+                    s.bg(palette.row_selected_bg)
+                } else {
+                    s.bg(palette.row_hover_bg)
+                }
+            })
+            .cursor_pointer()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(8.0))
+            .on_click(cx.listener(on_click))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .min_w_0()
+                    .child(lucide_svg(IconName::HEADPHONES, 13.0, palette.text_primary))
+                    .child(
+                        div()
+                            .truncate()
+                            .text_xs()
+                            .font_weight(if is_selected {
+                                FontWeight::SEMIBOLD
+                            } else {
+                                FontWeight::NORMAL
+                            })
+                            .text_color(palette.text_primary)
+                            .child(label),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_xs()
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(palette.accent_blue)
+                    .child(if is_selected { "Active" } else { "" }),
+            )
+    }
+
     fn render_routing_picker(
         &self,
         row: &AppRowState,
@@ -178,15 +247,15 @@ impl TrayPopoverView {
 
         let mut list = div()
             .w_full()
-            .mt(px(4.0))
+            .mt(px(6.0))
             .p(px(8.0))
-            .rounded(px(10.0))
+            .rounded(px(12.0))
             .bg(palette.card_bg)
             .border_1()
             .border_color(palette.card_border)
             .flex()
             .flex_col()
-            .gap(px(3.0))
+            .gap(px(4.0))
             .child(
                 div()
                     .w_full()
@@ -205,112 +274,34 @@ impl TrayPopoverView {
                             .child("Application Audio Output"),
                     ),
             )
-            // System Default option
-            .child(
-                div()
-                    .id(SharedString::from(format!("route-sys-{bundle_id}")))
-                    .w_full()
-                    .px(px(8.0))
-                    .py(px(4.0))
-                    .rounded(px(6.0))
-                    .bg(if is_system_default {
-                        palette.row_selected_bg
-                    } else {
-                        rgba(0x00000000)
-                    })
-                    .hover(move |s| s.bg(palette.row_hover_bg))
-                    .cursor_pointer()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.set_app_target_device(&bundle_sys, None, cx);
-                        this.expanded_routing_app = None;
-                    }))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.0))
-                            .child(lucide_svg(IconName::HEADPHONES, 13.0, palette.text_primary))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_weight(if is_system_default {
-                                        FontWeight::SEMIBOLD
-                                    } else {
-                                        FontWeight::NORMAL
-                                    })
-                                    .text_color(palette.text_primary)
-                                    .child("System Default Output"),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(palette.accent_blue)
-                            .child(if is_system_default { "Activo" } else { "" }),
-                    ),
-            );
+            .child(self.render_routing_option(
+                SharedString::from(format!("route-sys-{bundle_id}")),
+                SharedString::from("System Default Output"),
+                is_system_default,
+                palette,
+                move |this, _event, _window, cx| {
+                    this.set_app_target_device(&bundle_sys, None, cx);
+                    this.expanded_routing_app = None;
+                },
+                cx,
+            ));
 
         for dev in &self.snapshot.devices {
             let dev_uid = dev.uid.clone();
             let is_selected = current_target.as_deref() == Some(dev_uid.as_str());
             let bundle_dev = Arc::clone(&bundle_id);
 
-            list = list.child(
-                div()
-                    .id(SharedString::from(format!(
-                        "route-dev-{}-{}",
-                        bundle_id, dev.id
-                    )))
-                    .w_full()
-                    .px(px(8.0))
-                    .py(px(4.0))
-                    .rounded(px(6.0))
-                    .bg(if is_selected {
-                        palette.row_selected_bg
-                    } else {
-                        rgba(0x00000000)
-                    })
-                    .hover(move |s| s.bg(palette.row_hover_bg))
-                    .cursor_pointer()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.set_app_target_device(&bundle_dev, Some(dev_uid.clone()), cx);
-                        this.expanded_routing_app = None;
-                    }))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.0))
-                            .min_w_0()
-                            .child(lucide_svg(IconName::HEADPHONES, 13.0, palette.text_primary))
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_xs()
-                                    .font_weight(if is_selected {
-                                        FontWeight::SEMIBOLD
-                                    } else {
-                                        FontWeight::NORMAL
-                                    })
-                                    .text_color(palette.text_primary)
-                                    .child(dev.name.clone()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(palette.accent_blue)
-                            .child(if is_selected { "Activo" } else { "" }),
-                    ),
-            );
+            list = list.child(self.render_routing_option(
+                SharedString::from(format!("route-dev-{}-{}", bundle_id, dev.id)),
+                SharedString::from(dev.name.clone()),
+                is_selected,
+                palette,
+                move |this, _event, _window, cx| {
+                    this.set_app_target_device(&bundle_dev, Some(dev_uid.clone()), cx);
+                    this.expanded_routing_app = None;
+                },
+                cx,
+            ));
         }
 
         list
@@ -367,6 +358,8 @@ impl TrayPopoverView {
                     .child(row.info.name.clone()),
             );
 
+        let boost_enabled = row.config.boost_enabled;
+
         if self.advanced_mode {
             name_col = name_col.child(
                 div()
@@ -378,6 +371,7 @@ impl TrayPopoverView {
                     } else {
                         palette.text_secondary
                     })
+                    .hover(move |s| s.text_color(palette.accent_blue))
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.toggle_routing_picker(&bundle_for_route, cx);
@@ -470,13 +464,25 @@ impl TrayPopoverView {
                                     .id(SharedString::from(format!("app-pct-pill-{bundle_id}")))
                                     .w(px(44.0))
                                     .py(px(3.0))
-                                    .rounded(px(7.0))
-                                    .bg(if row.config.boost_enabled {
+                                    .rounded(px(8.0))
+                                    .border_1()
+                                    .border_color(if boost_enabled {
+                                        palette.row_selected_border
+                                    } else {
+                                        rgba(0x00000000)
+                                    })
+                                    .bg(if boost_enabled {
                                         rgba(0x2582ff38)
                                     } else {
                                         palette.pill_bg
                                     })
-                                    .hover(move |s| s.bg(palette.pill_hover_bg))
+                                    .hover(move |s| {
+                                        if boost_enabled {
+                                            s.bg(rgba(0x2582ff52))
+                                        } else {
+                                            s.bg(palette.pill_hover_bg)
+                                        }
+                                    })
                                     .cursor_pointer()
                                     .flex()
                                     .items_center()
@@ -493,8 +499,8 @@ impl TrayPopoverView {
                                 div()
                                     .id(SharedString::from(format!("app-mute-{bundle_id}")))
                                     .size(px(26.0))
-                                    .rounded(px(7.0))
-                                    .hover(move |s| s.bg(palette.pill_bg))
+                                    .rounded(px(8.0))
+                                    .hover(move |s| s.bg(palette.pill_hover_bg))
                                     .cursor_pointer()
                                     .flex()
                                     .items_center()

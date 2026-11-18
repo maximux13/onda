@@ -90,14 +90,26 @@ impl TrayPopoverView {
             .justify_between()
             .gap(px(8.0))
             .px(px(8.0))
-            .py(px(5.0))
-            .rounded(px(9.0))
+            .py(px(6.0))
+            .rounded(px(10.0))
+            .border_1()
+            .border_color(if is_default {
+                palette.row_selected_border
+            } else {
+                rgba(0x00000000)
+            })
             .bg(if is_default {
                 palette.row_selected_bg
             } else {
                 rgba(0x00000000)
             })
-            .hover(move |s| s.bg(palette.row_hover_bg))
+            .hover(move |s| {
+                if is_default {
+                    s.bg(palette.row_selected_bg)
+                } else {
+                    s.bg(palette.row_hover_bg)
+                }
+            })
             .child(
                 div()
                     .id(SharedString::from(format!("dev-select-{dev_id}")))
@@ -159,9 +171,9 @@ impl TrayPopoverView {
                     .gap(px(6.0))
                     .child(
                         div()
-                            .w(px(40.0))
+                            .w(px(42.0))
                             .py(px(2.0))
-                            .rounded(px(6.0))
+                            .rounded(px(7.0))
                             .bg(palette.pill_bg)
                             .flex()
                             .items_center()
@@ -174,9 +186,9 @@ impl TrayPopoverView {
                     .child(
                         div()
                             .id(SharedString::from(format!("dev-mute-{dev_id}")))
-                            .size(px(24.0))
-                            .rounded(px(6.0))
-                            .hover(move |s| s.bg(palette.pill_bg))
+                            .size(px(26.0))
+                            .rounded(px(7.0))
+                            .hover(move |s| s.bg(palette.pill_hover_bg))
                             .cursor_pointer()
                             .flex()
                             .items_center()
