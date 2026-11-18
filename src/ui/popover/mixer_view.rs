@@ -394,7 +394,7 @@ impl TrayPopoverView {
             scroll_area = scroll_area.child(self.render_output_picker_drawer(palette, cx));
         }
 
-        div()
+        let mut root = div()
             .w_full()
             .h_full()
             .flex()
@@ -403,9 +403,14 @@ impl TrayPopoverView {
             .child(self.render_mixer_header(palette, cx))
             .child(div().w_full().h(px(1.0)).bg(palette.divider))
             .child(self.render_apps_filter_bar(palette, cx))
-            .child(scroll_area)
-            .child(div().w_full().h(px(1.0)).bg(palette.divider))
-            .child(self.render_equalizer_section(palette, cx))
-            .child(self.render_mixer_footer(palette, cx))
+            .child(scroll_area);
+
+        if self.advanced_mode {
+            root = root
+                .child(div().w_full().h(px(1.0)).bg(palette.divider))
+                .child(self.render_equalizer_section(palette, cx));
+        }
+
+        root.child(self.render_mixer_footer(palette, cx))
     }
 }
