@@ -8,10 +8,11 @@ pub mod master;
 pub mod tap;
 
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 use crate::state::{
-    AppRowState, AppVolumeConfig, AudioAppInfo, DeviceIconKind, InputDeviceInfo, MixerSnapshot,
-    OutputDeviceInfo, Preferences, ThemeMode, WindowStyle,
+    AppRowState, AppVolumeConfig, AudioAppInfo, AutoDuckingConfig, DeviceIconKind, InputDeviceInfo,
+    MixerSnapshot, OutputDeviceInfo, Preferences, ThemeMode, WindowStyle,
 };
 use crate::storage::{JsonFileStore, PreferencesStore};
 use tap::AppTapHandle;
@@ -155,6 +156,41 @@ struct ActiveTap<T: TapController> {
     object_ids: Vec<u32>,
 }
 
+#[derive(Debug, Default)]
+struct DuckingTracker {
+    last_voice_active_at: Option<Instant>,
+    is_active: bool,
+}
+
+impl DuckingTracker {
+    fn update(
+        &mut self,
+        voice_peak_active: bool,
+        config: &AutoDuckingConfig,
+        now: Instant,
+    ) -> bool {
+        if !config.enabled {
+            self.is_active = false;
+            self.last_voice_active_at = None;
+            return false;
+        }
+        if voice_peak_active {
+            self.last_voice_active_at = Some(now);
+            self.is_active = true;
+            return true;
+        }
+        if let Some(last) = self.last_voice_active_at {
+            self.is_active = now.duration_since(last).as_millis() < config.release_ms as u128;
+            if !self.is_active {
+                self.last_voice_active_at = None;
+            }
+        } else {
+            self.is_active = false;
+        }
+        self.is_active
+    }
+}
+
 /// Coordinates Core Audio discovery, output device controls, per-app process taps,
 /// real-time 10-band peaking EQ, peak metering, and persisted preferences.
 pub struct AudioEngine<B: AudioBackend = CoreAudioBackend, S: PreferencesStore = JsonFileStore> {
@@ -167,6 +203,7 @@ pub struct AudioEngine<B: AudioBackend = CoreAudioBackend, S: PreferencesStore =
     last_output_uid: Option<String>,
     last_device_uids: HashSet<String>,
     selected_eq_app: Option<String>,
+    ducking: DuckingTracker,
 }
 
 /// Default [`AudioEngine`] specialization wired to Core Audio and JSON file persistence.
@@ -199,6 +236,7 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
             last_output_uid: None,
             last_device_uids: HashSet::new(),
             selected_eq_app: None,
+            ducking: DuckingTracker::default(),
         }
     }
 
@@ -233,7 +271,40 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
         (effective_enabled, effective_gain)
     }
 
+    fn is_bundle_ducked(&self, bundle_id: &str) -> bool {
+        self.ducking.is_active
+            && self
+                .prefs
+                .auto_ducking
+                .music_bundle_ids
+                .iter()
+                .any(|id| id == bundle_id)
+    }
+
+    fn effective_volume(&self, bundle_id: &str, config: &AppVolumeConfig) -> f32 {
+        let max_vol = if config.boost_enabled || config.volume > 1.0 {
+            self.prefs.max_volume_limit.clamp(1.0, 2.0)
+        } else {
+            1.0
+        };
+        let base_volume = config.volume.clamp(0.0, max_vol);
+        if self.is_bundle_ducked(bundle_id) {
+            base_volume * self.prefs.auto_ducking.duck_amount.clamp(0.05, 1.0)
+        } else {
+            base_volume
+        }
+    }
+
     fn ensure_tap(&mut self, bundle_id: &str, config: &AppVolumeConfig) {
+        self.ensure_tap_with_apply(bundle_id, config, true);
+    }
+
+    fn ensure_tap_with_apply(
+        &mut self,
+        bundle_id: &str,
+        config: &AppVolumeConfig,
+        update_existing: bool,
+    ) {
         let Some(uid) = self.resolve_target_uid(config) else {
             self.taps.remove(bundle_id);
             return;
@@ -245,12 +316,7 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
             return;
         }
 
-        let max_vol = if config.boost_enabled || config.volume > 1.0 {
-            self.prefs.max_volume_limit.clamp(1.0, 2.0)
-        } else {
-            1.0
-        };
-        let effective_volume = config.volume.clamp(0.0, max_vol);
+        let effective_volume = self.effective_volume(bundle_id, config);
         let (eq_enabled, eq_gains) = self.effective_eq(config);
 
         let needs_recreate = match self.taps.get(bundle_id) {
@@ -258,9 +324,11 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
                 if existing.handle.output_device_uid() == uid
                     && existing.object_ids == *object_ids =>
             {
-                existing.handle.set_volume(effective_volume);
-                existing.handle.set_muted(config.muted);
-                existing.handle.set_eq(eq_enabled, &eq_gains);
+                if update_existing {
+                    existing.handle.set_volume(effective_volume);
+                    existing.handle.set_muted(config.muted);
+                    existing.handle.set_eq(eq_enabled, &eq_gains);
+                }
                 false
             }
             _ => true,
@@ -339,6 +407,31 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
         self.taps
             .retain(|bundle_id, _| active_bundle_ids.contains(bundle_id.as_str()));
 
+        // Ensure taps exist for active processes before sampling voice peaks for auto-ducking.
+        for proc in &processes {
+            if proc.is_running_output {
+                let config = self
+                    .configs
+                    .get(&proc.bundle_id)
+                    .cloned()
+                    .unwrap_or_default();
+                self.ensure_tap_with_apply(&proc.bundle_id, &config, false);
+            }
+        }
+
+        let threshold = self.prefs.auto_ducking.threshold;
+        let voice_peak_active = self.taps.iter().any(|(bundle_id, tap)| {
+            self.prefs
+                .auto_ducking
+                .voice_bundle_ids
+                .iter()
+                .any(|id| id == bundle_id)
+                && tap.handle.peak_level() >= threshold
+        });
+        let ducking_active =
+            self.ducking
+                .update(voice_peak_active, &self.prefs.auto_ducking, Instant::now());
+
         let mut apps = Vec::with_capacity(processes.len());
         for proc in processes {
             let config = self
@@ -356,6 +449,8 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
                 .get(&proc.bundle_id)
                 .map(|t| t.handle.peak_level())
                 .unwrap_or(0.0);
+
+            let is_ducked = self.is_bundle_ducked(&proc.bundle_id);
 
             let routed_dev = config
                 .target_device_uid
@@ -377,6 +472,7 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
                 peak_level,
                 routed_device_name,
                 routed_device_icon,
+                is_ducked,
             });
         }
 
@@ -398,6 +494,8 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
             global_eq_enabled: self.prefs.global_eq_enabled,
             global_eq_gains: self.prefs.global_eq_gains,
             selected_eq_app: self.selected_eq_app.clone(),
+            ducking_active,
+            auto_ducking: self.prefs.auto_ducking.clone(),
         }
     }
 
@@ -588,6 +686,17 @@ impl<B: AudioBackend, S: PreferencesStore> AudioEngine<B, S> {
         self.save_prefs();
     }
 
+    /// Updates auto-ducking configuration, persists preferences, and refreshes active taps.
+    pub fn set_auto_ducking_config(&mut self, config: AutoDuckingConfig) {
+        self.prefs.auto_ducking = config;
+        if !self.prefs.auto_ducking.enabled {
+            self.ducking
+                .update(false, &self.prefs.auto_ducking, Instant::now());
+        }
+        self.save_prefs();
+        self.refresh_all_taps();
+    }
+
     pub fn reset_saved_app_configs(&mut self) {
         self.configs.clear();
         self.prefs.apps.clear();
@@ -634,6 +743,14 @@ mod tests {
     struct FakeTap {
         state: Rc<RefCell<FakeTapState>>,
         output_device_uid: String,
+        object_ids: Vec<u32>,
+        object_peaks: Rc<RefCell<HashMap<u32, f32>>>,
+    }
+
+    impl FakeTap {
+        fn last_volume(&self) -> f32 {
+            self.state.borrow().volume
+        }
     }
 
     impl Drop for FakeTap {
@@ -658,7 +775,11 @@ mod tests {
         }
 
         fn peak_level(&self) -> f32 {
-            self.state.borrow().peak_level
+            let peaks = self.object_peaks.borrow();
+            self.object_ids
+                .iter()
+                .filter_map(|id| peaks.get(id).copied())
+                .fold(self.state.borrow().peak_level, f32::max)
         }
 
         fn output_device_uid(&self) -> &str {
@@ -672,6 +793,7 @@ mod tests {
         input_devices: Vec<InputDeviceInfo>,
         processes: Rc<RefCell<Vec<AudioAppInfo>>>,
         created_taps: Rc<RefCell<Vec<Rc<RefCell<FakeTapState>>>>>,
+        object_peaks: Rc<RefCell<HashMap<u32, f32>>>,
         last_input_volume: Rc<RefCell<Option<(u32, f32)>>>,
         last_input_mute: Rc<RefCell<Option<(u32, bool)>>>,
         last_default_input: Rc<RefCell<Option<u32>>>,
@@ -686,6 +808,16 @@ mod tests {
                 devices: Rc::new(RefCell::new(devices)),
                 processes: Rc::new(RefCell::new(processes)),
                 ..Default::default()
+            }
+        }
+
+        fn set_fake_peak(&self, bundle_id: &str, peak: f32) {
+            let procs = self.processes.borrow();
+            let mut peaks = self.object_peaks.borrow_mut();
+            for proc in procs.iter().filter(|p| p.bundle_id == bundle_id) {
+                for &oid in &proc.object_ids {
+                    peaks.insert(oid, peak);
+                }
             }
         }
 
@@ -756,7 +888,7 @@ mod tests {
 
         fn create_process_tap(
             &self,
-            _object_ids: &[u32],
+            object_ids: &[u32],
             output_device_uid: &str,
             volume: f32,
             muted: bool,
@@ -769,13 +901,15 @@ mod tests {
                 muted,
                 eq_enabled,
                 eq_gains: *eq_gains,
-                peak_level: 0.25,
+                peak_level: 0.0,
                 dropped: false,
             }));
             self.created_taps.borrow_mut().push(state.clone());
             Ok(FakeTap {
                 state,
                 output_device_uid: output_device_uid.to_string(),
+                object_ids: object_ids.to_vec(),
+                object_peaks: self.object_peaks.clone(),
             })
         }
     }
@@ -1014,5 +1148,120 @@ mod tests {
         assert_eq!(engine.backend.last_input_volume(), Some((42, 0.45)));
         assert_eq!(engine.backend.last_input_mute(), Some((42, true)));
         assert_eq!(engine.backend.last_default_input(), Some(42));
+    }
+
+    #[test]
+    fn auto_ducking_lowers_music_tap_volume_without_mutating_config() {
+        let backend = FakeBackend::with_devices_and_processes(
+            vec![make_device(1, "uid-default", "Speakers", true)],
+            vec![
+                make_app("com.hnc.Discord", "Discord", vec![10]),
+                make_app("com.spotify.client", "Spotify", vec![20]),
+            ],
+        );
+        let mut engine = AudioEngine::with_backend_and_store(backend, MemoryStore::default());
+        engine.set_app_volume("com.spotify.client", 0.80);
+
+        let duck_cfg = crate::state::AutoDuckingConfig {
+            enabled: true,
+            duck_amount: 0.25,
+            threshold: 0.05,
+            ..Default::default()
+        };
+        engine.set_auto_ducking_config(duck_cfg);
+
+        // Simulate Discord outputting voice above threshold.
+        engine.backend.set_fake_peak("com.hnc.Discord", 0.40);
+        let snap = engine.snapshot();
+        assert!(snap.ducking_active);
+
+        let spotify_row = snap
+            .apps
+            .iter()
+            .find(|a| a.info.bundle_id == "com.spotify.client")
+            .unwrap();
+        assert!(spotify_row.is_ducked);
+        assert!((spotify_row.config.volume - 0.80).abs() < 1e-5);
+
+        let spotify_tap = engine.taps.get("com.spotify.client").unwrap();
+        assert!((spotify_tap.handle.last_volume() - 0.20).abs() < 1e-5);
+
+        let discord_row = snap
+            .apps
+            .iter()
+            .find(|a| a.info.bundle_id == "com.hnc.Discord")
+            .unwrap();
+        assert!(!discord_row.is_ducked);
+    }
+
+    #[test]
+    fn auto_ducking_tracker_holds_during_release_window_and_resets_when_disabled() {
+        use std::time::Duration;
+
+        let mut tracker = DuckingTracker::default();
+        let mut cfg = AutoDuckingConfig {
+            enabled: true,
+            release_ms: 1200,
+            ..Default::default()
+        };
+
+        let t0 = Instant::now();
+        assert!(!tracker.update(false, &cfg, t0));
+        assert!(tracker.update(true, &cfg, t0));
+
+        // Voice stops, still inside release_ms window -> stays active.
+        assert!(tracker.update(false, &cfg, t0 + Duration::from_millis(500)));
+        assert!(tracker.update(false, &cfg, t0 + Duration::from_millis(1199)));
+
+        // At/after release_ms -> releases.
+        assert!(!tracker.update(false, &cfg, t0 + Duration::from_millis(1200)));
+
+        // Re-activate, then disable -> resets immediately.
+        assert!(tracker.update(true, &cfg, t0 + Duration::from_millis(1300)));
+        cfg.enabled = false;
+        assert!(!tracker.update(true, &cfg, t0 + Duration::from_millis(1350)));
+        assert!(tracker.last_voice_active_at.is_none());
+    }
+
+    #[test]
+    fn auto_ducking_updates_volume_when_adjusted_while_ducked_and_restores_on_disable() {
+        let backend = FakeBackend::with_devices_and_processes(
+            vec![make_device(1, "uid-default", "Speakers", true)],
+            vec![
+                make_app("com.spotify.client", "Spotify", vec![20]),
+                make_app("com.hnc.Discord", "Discord", vec![10]),
+            ],
+        );
+        let mut engine = AudioEngine::with_backend_and_store(backend, MemoryStore::default());
+        engine.set_app_volume("com.spotify.client", 0.80);
+
+        let duck_cfg = AutoDuckingConfig {
+            enabled: true,
+            duck_amount: 0.25,
+            threshold: 0.05,
+            ..Default::default()
+        };
+        engine.set_auto_ducking_config(duck_cfg.clone());
+        engine.backend.set_fake_peak("com.hnc.Discord", 0.30);
+
+        // Even when Spotify appears before Discord in processes, Spotify is ducked on first snapshot.
+        let snap = engine.snapshot();
+        assert!(snap.ducking_active);
+        assert!((engine.taps["com.spotify.client"].handle.last_volume() - 0.20).abs() < 1e-5);
+
+        // Adjusting Spotify's volume while ducked stores unscaled config and applies scaled tap volume.
+        engine.set_app_volume("com.spotify.client", 0.40);
+        assert!((engine.configs["com.spotify.client"].volume - 0.40).abs() < 1e-5);
+        assert!((engine.taps["com.spotify.client"].handle.last_volume() - 0.10).abs() < 1e-5);
+
+        // Disabling auto-ducking immediately restores full tap volume.
+        engine.set_auto_ducking_config(AutoDuckingConfig {
+            enabled: false,
+            ..duck_cfg
+        });
+        assert!((engine.taps["com.spotify.client"].handle.last_volume() - 0.40).abs() < 1e-5);
+        let snap2 = engine.snapshot();
+        assert!(!snap2.ducking_active);
+        assert!(!snap2.apps[0].is_ducked);
     }
 }

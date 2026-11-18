@@ -123,6 +123,42 @@ impl Default for AppVolumeConfig {
     }
 }
 
+/// Configuration for automatic music ducking when voice apps output audio.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutoDuckingConfig {
+    pub enabled: bool,
+    pub duck_amount: f32,
+    pub threshold: f32,
+    pub release_ms: u64,
+    pub voice_bundle_ids: Vec<String>,
+    pub music_bundle_ids: Vec<String>,
+}
+
+impl Default for AutoDuckingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            duck_amount: 0.30,
+            threshold: 0.02,
+            release_ms: 1200,
+            voice_bundle_ids: vec![
+                "com.hnc.Discord".to_string(),
+                "us.zoom.xos".to_string(),
+                "com.tinyspeck.slackmacgap".to_string(),
+                "com.microsoft.teams2".to_string(),
+                "com.apple.FaceTime".to_string(),
+            ],
+            music_bundle_ids: vec![
+                "com.spotify.client".to_string(),
+                "com.apple.Music".to_string(),
+                "com.tidal.desktop".to_string(),
+                "org.videolan.vlc".to_string(),
+            ],
+        }
+    }
+}
+
 /// Legacy single-master struct kept for compatibility.
 #[derive(Clone, Debug, Default)]
 pub struct MasterState {
@@ -142,6 +178,8 @@ pub struct AppRowState {
     pub routed_device_name: String,
     /// Icon kind of the output device this app is routed to.
     pub routed_device_icon: DeviceIconKind,
+    /// Whether this app is currently attenuated by auto-ducking.
+    pub is_ducked: bool,
 }
 
 /// Full snapshot of mixer state passed from the audio engine to the UI.
@@ -165,6 +203,9 @@ pub struct MixerSnapshot {
     pub global_eq_gains: [f32; 10],
     /// Selected app `bundle_id` for the equalizer (`None` = Global Equalizer).
     pub selected_eq_app: Option<String>,
+    /// Whether auto-ducking is currently attenuating music apps.
+    pub ducking_active: bool,
+    pub auto_ducking: AutoDuckingConfig,
 }
 
 impl Default for MixerSnapshot {
@@ -187,6 +228,8 @@ impl Default for MixerSnapshot {
             global_eq_enabled: true,
             global_eq_gains: [0.0; 10],
             selected_eq_app: None,
+            ducking_active: false,
+            auto_ducking: AutoDuckingConfig::default(),
         }
     }
 }
@@ -218,6 +261,8 @@ pub struct Preferences {
     pub global_eq_gains: [f32; 10],
     #[serde(default)]
     pub apps: HashMap<String, AppVolumeConfig>,
+    #[serde(default)]
+    pub auto_ducking: AutoDuckingConfig,
 }
 
 impl Default for Preferences {
@@ -235,6 +280,7 @@ impl Default for Preferences {
             global_eq_enabled: true,
             global_eq_gains: [0.0; 10],
             apps: HashMap::new(),
+            auto_ducking: AutoDuckingConfig::default(),
         }
     }
 }
@@ -297,5 +343,29 @@ mod tests {
         assert_eq!(EQ_LABELS.len(), 10);
         assert_eq!(EQ_FREQUENCIES[0], 32.0);
         assert_eq!(EQ_FREQUENCIES[9], 16000.0);
+    }
+
+    #[test]
+    fn test_preferences_without_auto_ducking_deserializes_with_defaults() {
+        let legacy_json = r#"{"theme":"Dark"}"#;
+        let prefs: Preferences = serde_json::from_str(legacy_json).expect("deserialize legacy");
+        assert!(!prefs.auto_ducking.enabled);
+        assert!((prefs.auto_ducking.duck_amount - 0.30).abs() < 1e-6);
+        assert!((prefs.auto_ducking.threshold - 0.02).abs() < 1e-6);
+        assert_eq!(prefs.auto_ducking.release_ms, 1200);
+        assert!(
+            prefs
+                .auto_ducking
+                .voice_bundle_ids
+                .iter()
+                .any(|id| id == "com.hnc.Discord")
+        );
+        assert!(
+            prefs
+                .auto_ducking
+                .music_bundle_ids
+                .iter()
+                .any(|id| id == "com.spotify.client")
+        );
     }
 }
