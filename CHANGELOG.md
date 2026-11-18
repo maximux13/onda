@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **GitHub Releases Auto-Updater (`src/updater.rs`):**
+  - Periodic background release checks (3s after launch, then every 6 hours) and manual checks from **Settings → About**.
+  - Popover update banner, settings badge indicator, `.zip` download and `Onda.app` bundle replacement, quarantine xattr cleanup, and one-click relaunch.
+  - Typed `UpdaterError` error handling and unit/mock-server tests covering version comparison, plist parsing, release checks, and bundle replacement.
+- **Local Updater Test Harness (`scripts/test_updater_local.sh`):**
+  - Spins up a local mock GitHub Releases HTTP server with a staged `Onda-macos-arm64.zip` and launches `Onda.app` using `ONDA_UPDATE_API_URL`, `ONDA_UPDATE_CURRENT_VERSION`, and `ONDA_UPDATE_INSTALL_PATH`.
+
 ## [0.1.0] - 2026-11-17
 
 ### Added

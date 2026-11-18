@@ -26,6 +26,7 @@
 - **Per-App Output Device Routing & Volume Boost:** Route specific apps to different output devices (e.g., Spotify to Bluetooth speakers while Brave plays on headphones) and boost quiet apps up to **200%**.
 - **Real-Time VU Metering:** 5-bar LED peak meter per application powered by lock-free atomic peak tracking.
 - **Launch at Login & Persistent Preferences:** Native macOS `LaunchAgent` integration and automatic state persistence in `~/Library/Application Support/Onda/volumes.json`.
+- **GitHub Releases Auto-Updater:** Background and manual update checks against GitHub Releases (`maximux13/onda`), in-app `.app` bundle replacement, and one-click relaunch.
 
 ---
 
@@ -77,6 +78,24 @@ open target/release/Onda.app
 
 > **Note on macOS Permissions:** The first time you adjust an application's volume or EQ, macOS will prompt for **System Audio Recording** permission (`NSAudioCaptureUsageDescription`). Grant it in **System Settings → Privacy & Security → Audio Recording** so Core Audio Process Taps can intercept audio streams.
 
+### Testing Auto-Updates Locally
+
+You can test the full download, `.app` bundle replacement, and relaunch flow against a local mock GitHub Releases server without publishing a real tag:
+
+```bash
+# Builds debug Onda.app, packages a mock v99.0.0 release zip, starts a local HTTP server,
+# and launches Onda with updater overrides pointing to http://127.0.0.1:8787
+./scripts/test_updater_local.sh
+
+# Optionally pass a custom fake version or port:
+ONDA_TEST_PORT=8787 ./scripts/test_updater_local.sh 1.2.3
+```
+
+The updater honors three optional environment variables for local testing:
+- `ONDA_UPDATE_API_URL`: Overrides the GitHub API base URL (e.g., `http://127.0.0.1:8787`).
+- `ONDA_UPDATE_CURRENT_VERSION`: Overrides the reported current app version (e.g., `0.1.0`).
+- `ONDA_UPDATE_INSTALL_PATH`: Overrides the target `.app` bundle path to replace.
+
 ---
 
 ## 🗺️ Roadmap & Future Updates
@@ -94,7 +113,7 @@ open target/release/Onda.app
 ### `v1.0.0` — Distribution & Polish
 - [ ] **Homebrew Cask (`brew install --cask onda`)**
 - [ ] **Apple Developer ID Code Signing & Notarization**
-- [ ] **Sparkle / GitHub Releases Auto-Updater**
+- [x] **GitHub Releases Auto-Updater** (`self_update` + in-app `.app` bundle replacement & relaunch)
 - [ ] **Unit & Integration Test Suite** (DSP biquad frequency response, preference serialization, HSV dominant color extraction)
 
 ---

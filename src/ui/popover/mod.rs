@@ -103,6 +103,15 @@ impl TrayPopoverView {
         self.updater.lock().map(|u| u.state()).unwrap_or_default()
     }
 
+    /// Relaunches the updated `.app` bundle and quits the current instance if launch succeeds.
+    pub(super) fn relaunch_and_quit(&self, app_path: &std::path::Path, cx: &mut Context<Self>) {
+        if let Err(err) = relaunch_app(app_path) {
+            eprintln!("{err}");
+            return;
+        }
+        cx.quit();
+    }
+
     /// Renders a compact top banner when an update is available, downloading, ready, or errored.
     fn render_update_banner(
         &self,
@@ -153,7 +162,7 @@ impl TrayPopoverView {
                             .text_xs()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(palette.text_primary)
-                            .child(format!("Nueva versión v{} disponible", info.version)),
+                            .child(format!("New version v{} available", info.version)),
                     )
                     .child(
                         div()
@@ -177,7 +186,7 @@ impl TrayPopoverView {
                                             &this.updater,
                                         ));
                                     }))
-                                    .child("Actualizar"),
+                                    .child("Update"),
                             )
                             .child(dismiss_btn("update-banner-dismiss-available", cx)),
                     )
@@ -193,7 +202,7 @@ impl TrayPopoverView {
                             .text_xs()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(palette.text_secondary)
-                            .child(format!("Descargando Onda v{version}...")),
+                            .child(format!("Downloading Onda v{version}...")),
                     )
                     .into_any_element(),
             ),
@@ -207,7 +216,7 @@ impl TrayPopoverView {
                             .text_xs()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(palette.text_primary)
-                            .child(format!("Onda v{version} lista")),
+                            .child(format!("Onda v{version} ready")),
                     )
                     .child(
                         div()
@@ -221,11 +230,10 @@ impl TrayPopoverView {
                             .text_xs()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(rgb(0xffffff))
-                            .on_click(cx.listener(move |_this, _event, _window, cx| {
-                                let _ = relaunch_app(&app_path);
-                                cx.quit();
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.relaunch_and_quit(&app_path, cx);
                             }))
-                            .child("Reiniciar y actualizar"),
+                            .child("Restart & Update"),
                     )
                     .into_any_element(),
             ),
@@ -265,7 +273,7 @@ impl TrayPopoverView {
                                         UpdateController::trigger_check(Arc::clone(&this.updater));
                                         cx.notify();
                                     }))
-                                    .child("Reintentar"),
+                                    .child("Retry"),
                             )
                             .child(dismiss_btn("update-banner-dismiss-error", cx)),
                     )

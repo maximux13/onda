@@ -1,10 +1,37 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+/// GitHub repository owner used for release checks.
 pub const REPO_OWNER: &str = "maximux13";
+/// GitHub repository name used for release checks.
 pub const REPO_NAME: &str = "onda";
+/// Binary name inside the macOS `.app` bundle.
 pub const BIN_NAME: &str = "onda";
+/// macOS application bundle directory name.
 pub const BUNDLE_NAME: &str = "Onda.app";
+
+/// Errors returned by [`check_for_updates`], [`download_and_install_update`], and [`relaunch_app`].
+#[derive(Debug, thiserror::Error)]
+pub enum UpdaterError {
+    /// Could not determine the path of the currently running executable.
+    #[error("Failed to locate current executable: {0}")]
+    CurrentExecutable(#[source] std::io::Error),
+    /// The app is not running from an `.app` bundle and no override path was provided.
+    #[error("Auto-update requires running from Onda.app (or setting ONDA_UPDATE_INSTALL_PATH)")]
+    MissingAppBundle,
+    /// Error returned by the underlying `self_update` client.
+    #[error("{0}")]
+    SelfUpdate(#[from] self_update::errors::Error),
+    /// The latest GitHub Release does not contain a macOS `.zip` asset.
+    #[error("Release v{version} has no macOS .zip asset")]
+    MissingZipAsset {
+        /// Version tag of the release missing the `.zip` asset.
+        version: String,
+    },
+    /// Failed to spawn the detached relaunch command.
+    #[error("Failed to relaunch Onda: {0}")]
+    Relaunch(#[source] std::io::Error),
+}
 
 /// Configuration for checking and applying GitHub Release updates.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -118,20 +145,16 @@ pub fn find_enclosing_app_bundle(exe_path: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-fn resolve_target_app_bundle(config: &UpdateConfig) -> Result<PathBuf, String> {
+fn resolve_target_app_bundle(config: &UpdateConfig) -> Result<PathBuf, UpdaterError> {
     if let Some(path) = &config.bundle_install_path {
         return Ok(path.clone());
     }
-    let exe =
-        std::env::current_exe().map_err(|e| format!("Failed to locate current executable: {e}"))?;
-    find_enclosing_app_bundle(&exe).ok_or_else(|| {
-        "Auto-update requires running from Onda.app (or setting ONDA_UPDATE_INSTALL_PATH)"
-            .to_string()
-    })
+    let exe = std::env::current_exe().map_err(UpdaterError::CurrentExecutable)?;
+    find_enclosing_app_bundle(&exe).ok_or(UpdaterError::MissingAppBundle)
 }
 
 /// Queries GitHub Releases (or `config.api_base_url`) for a version newer than `config.current_version`.
-pub fn check_for_updates(config: &UpdateConfig) -> Result<Option<UpdateInfo>, String> {
+pub fn check_for_updates(config: &UpdateConfig) -> Result<Option<UpdateInfo>, UpdaterError> {
     let mut builder = self_update::backends::github::ReleaseList::configure();
     builder
         .repo_owner(&config.repo_owner)
@@ -141,11 +164,7 @@ pub fn check_for_updates(config: &UpdateConfig) -> Result<Option<UpdateInfo>, St
         builder.api_base_url(base_url);
     }
 
-    let releases = builder
-        .build()
-        .map_err(|e| format!("Failed to configure release check: {e}"))?
-        .fetch()
-        .map_err(|e| format!("Failed to fetch releases: {e}"))?;
+    let releases = builder.build()?.fetch()?;
 
     let Some(latest) = releases.latest() else {
         return Ok(None);
@@ -157,10 +176,9 @@ pub fn check_for_updates(config: &UpdateConfig) -> Result<Option<UpdateInfo>, St
 
     let has_zip = latest.assets().iter().any(|a| a.name().ends_with(".zip"));
     if !has_zip {
-        return Err(format!(
-            "Release v{} has no macOS .zip asset",
-            latest.version()
-        ));
+        return Err(UpdaterError::MissingZipAsset {
+            version: latest.version().to_string(),
+        });
     }
 
     Ok(Some(UpdateInfo {
@@ -170,7 +188,9 @@ pub fn check_for_updates(config: &UpdateConfig) -> Result<Option<UpdateInfo>, St
 }
 
 /// Downloads the latest release `.zip` and replaces the `Onda.app` bundle on disk.
-pub fn download_and_install_update(config: &UpdateConfig) -> Result<(String, PathBuf), String> {
+pub fn download_and_install_update(
+    config: &UpdateConfig,
+) -> Result<(String, PathBuf), UpdaterError> {
     let app_path = resolve_target_app_bundle(config)?;
 
     let mut builder = self_update::backends::github::Update::configure();
@@ -189,17 +209,19 @@ pub fn download_and_install_update(config: &UpdateConfig) -> Result<(String, Pat
         builder.api_base_url(base_url);
     }
 
-    let status = builder
-        .build()
-        .map_err(|e| format!("Failed to configure updater: {e}"))?
-        .update()
-        .map_err(|e| format!("Update failed: {e}"))?;
+    let status = builder.build()?.update()?;
 
     // Clear macOS quarantine xattr if present so Gatekeeper does not block relaunch.
-    let _ = std::process::Command::new("xattr")
+    if let Err(err) = std::process::Command::new("xattr")
         .args(["-dr", "com.apple.quarantine"])
         .arg(&app_path)
-        .output();
+        .output()
+    {
+        eprintln!(
+            "Failed to clear quarantine attribute on {}: {err}",
+            app_path.display()
+        );
+    }
 
     Ok((
         status.version().trim_start_matches('v').to_string(),
@@ -208,13 +230,13 @@ pub fn download_and_install_update(config: &UpdateConfig) -> Result<(String, Pat
 }
 
 /// Launches the updated `.app` bundle after a short delay so the current process can exit cleanly.
-pub fn relaunch_app(app_path: &Path) -> Result<(), String> {
+pub fn relaunch_app(app_path: &Path) -> Result<(), UpdaterError> {
     let escaped = app_path.to_string_lossy().replace('\'', "'\\''");
     let cmd = format!("sleep 0.4 && open -n '{escaped}'");
     std::process::Command::new("/bin/sh")
         .args(["-c", &cmd])
         .spawn()
-        .map_err(|e| format!("Failed to relaunch Onda: {e}"))?;
+        .map_err(UpdaterError::Relaunch)?;
     Ok(())
 }
 
@@ -225,6 +247,7 @@ pub struct UpdateController {
 }
 
 impl UpdateController {
+    /// Creates a new [`UpdateController`] in the [`UpdateState::Idle`] state.
     pub fn new(config: UpdateConfig) -> Self {
         Self {
             config,
@@ -232,6 +255,7 @@ impl UpdateController {
         }
     }
 
+    /// Returns a cloned snapshot of the current [`UpdateState`].
     pub fn state(&self) -> UpdateState {
         self.state.clone()
     }
@@ -267,7 +291,7 @@ impl UpdateController {
                 Ok(Some(info)) => UpdateState::Available(info),
                 Ok(None) => UpdateState::UpToDate,
                 Err(_) if silent_on_error => UpdateState::Idle,
-                Err(err) => UpdateState::Error(err),
+                Err(err) => UpdateState::Error(err.to_string()),
             };
             if let Ok(mut guard) = controller.lock() {
                 guard.state = next_state;
@@ -301,7 +325,7 @@ impl UpdateController {
                     },
                     app_path,
                 },
-                Err(err) => UpdateState::Error(err),
+                Err(err) => UpdateState::Error(err.to_string()),
             };
             if let Ok(mut guard) = controller.lock() {
                 guard.state = next_state;
@@ -315,6 +339,25 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+
+    struct TempDirGuard(PathBuf);
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn unique_temp_dir(prefix: &str) -> TempDirGuard {
+        let dir = std::env::temp_dir().join(format!(
+            "{prefix}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        TempDirGuard(dir)
+    }
 
     fn build_minimal_zip_with_app(app_name: &str, binary_content: &[u8]) -> Vec<u8> {
         let cursor = std::io::Cursor::new(Vec::new());
@@ -428,14 +471,8 @@ mod tests {
 
     #[test]
     fn download_and_install_replaces_app_bundle_in_temp_dir() {
-        let temp_dir = std::env::temp_dir().join(format!(
-            "onda-updater-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let app_dir = temp_dir.join("Onda.app");
+        let temp_dir = unique_temp_dir("onda-updater-test");
+        let app_dir = temp_dir.0.join("Onda.app");
         std::fs::create_dir_all(app_dir.join("Contents/MacOS")).unwrap();
         std::fs::write(app_dir.join("Contents/MacOS/onda"), b"old-binary").unwrap();
 
@@ -455,8 +492,45 @@ mod tests {
         assert_eq!(installed_path, app_dir);
         let updated_bin = std::fs::read(app_dir.join("Contents/MacOS/onda")).unwrap();
         assert_eq!(updated_bin, b"new-binary-v0.2.0");
+    }
 
-        let _ = std::fs::remove_dir_all(&temp_dir);
+    #[test]
+    fn bundle_short_version_reads_plist_value() {
+        let temp_dir = unique_temp_dir("onda-plist-test");
+        let contents_dir = temp_dir.0.join("Onda.app/Contents");
+        std::fs::create_dir_all(&contents_dir).unwrap();
+        std::fs::write(
+            contents_dir.join("Info.plist"),
+            r#"<plist><dict><key>CFBundleShortVersionString</key><string>1.2.3</string></dict></plist>"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            bundle_short_version(&temp_dir.0.join("Onda.app")),
+            Some("1.2.3".to_string())
+        );
+    }
+
+    #[test]
+    fn check_for_updates_returns_none_when_already_up_to_date() {
+        let zip_bytes = build_minimal_zip_with_app("Onda.app", b"bin");
+        let (base_url, _server) = spawn_mock_github_server("v0.2.0", zip_bytes);
+
+        let config = UpdateConfig {
+            current_version: "0.2.0".to_string(),
+            api_base_url: Some(base_url),
+            ..UpdateConfig::default()
+        };
+
+        assert_eq!(check_for_updates(&config).unwrap(), None);
+    }
+
+    #[test]
+    fn updater_error_display_messages_are_clear() {
+        let err = UpdaterError::MissingZipAsset {
+            version: "0.2.0".to_string(),
+        };
+        assert_eq!(err.to_string(), "Release v0.2.0 has no macOS .zip asset");
     }
 
     #[test]

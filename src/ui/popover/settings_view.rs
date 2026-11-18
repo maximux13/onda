@@ -7,7 +7,7 @@ use crate::state::{ThemeMode, WindowStyle};
 use crate::ui::ThemePalette;
 use crate::ui::icons::{IconName, lucide_svg};
 use crate::ui::slider::VolumeSlider;
-use crate::updater::{UpdateController, UpdateState, relaunch_app};
+use crate::updater::{UpdateController, UpdateState};
 
 use super::{SettingsTab, TrayPopoverView};
 
@@ -971,9 +971,8 @@ impl TrayPopoverView {
                     .text_xs()
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(rgb(0xffffff))
-                    .on_click(cx.listener(move |_this, _event, _window, cx| {
-                        let _ = relaunch_app(&app_path);
-                        cx.quit();
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.relaunch_and_quit(&app_path, cx);
                     }))
                     .child("Restart & Update")
                     .into_any_element(),
