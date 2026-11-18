@@ -64,7 +64,11 @@ fn main() {
                 }
             };
 
-            cx.bind_keys([KeyBinding::new("escape", ClosePopover, None)]);
+            cx.bind_keys([
+                KeyBinding::new("escape", ClosePopover, None),
+                KeyBinding::new("cmd-q", QuitApp, None),
+            ]);
+            cx.on_action(|_: &QuitApp, cx| cx.quit());
 
             let mut active_window: Option<WindowHandle<TrayPopoverView>> = None;
 
@@ -82,11 +86,13 @@ fn main() {
                     while let Ok(cmd) = tray_rx.try_recv() {
                         match cmd {
                             TrayCommand::TogglePopover { .. } => {
+                                let anchor = _tray.status_item_center();
                                 toggle_popover_window(
                                     &mut active_window,
                                     &engine,
                                     &updater,
                                     &hotkeys,
+                                    anchor,
                                     cx,
                                 );
                             }
@@ -108,11 +114,13 @@ fn main() {
                         if let Some(action) = action {
                             match action {
                                 ShortcutAction::TogglePopover => {
+                                    let anchor = _tray.status_item_center();
                                     toggle_popover_window(
                                         &mut active_window,
                                         &engine,
                                         &updater,
                                         &hotkeys,
+                                        anchor,
                                         cx,
                                     );
                                 }
@@ -151,6 +159,7 @@ fn toggle_popover_window(
     engine: &Arc<Mutex<AudioEngine>>,
     updater: &Arc<Mutex<UpdateController>>,
     hotkeys: &Arc<Mutex<HotkeyManager>>,
+    anchor: Option<(f64, f64)>,
     cx: &mut AsyncApp,
 ) {
     let is_open = active_window
@@ -186,7 +195,8 @@ fn toggle_popover_window(
     let updater_clone = Arc::clone(updater);
     let hotkeys_clone = Arc::clone(hotkeys);
     let opened = cx.update(|cx| {
-        let placement = platform::compute_popover_placement(cx, POPOVER_WIDTH, initial_height);
+        let placement =
+            platform::compute_popover_placement(cx, POPOVER_WIDTH, initial_height, anchor);
 
         let options = WindowOptions {
             kind: WindowKind::PopUp,
@@ -218,7 +228,9 @@ fn toggle_popover_window(
                     )
                     .detach();
 
-                    TrayPopoverView::new(engine_clone, updater_clone, hotkeys_clone, cx)
+                    let view = TrayPopoverView::new(engine_clone, updater_clone, hotkeys_clone, cx);
+                    window.focus(&view.focus_handle);
+                    view
                 });
 
                 view
@@ -276,4 +288,4 @@ fn toggle_popover_window(
     }
 }
 
-gpui::actions!(volume_mixer, [ClosePopover]);
+gpui::actions!(volume_mixer, [ClosePopover, QuitApp]);

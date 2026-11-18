@@ -161,16 +161,26 @@ impl TrayPopoverView {
         );
     }
 
-    fn set_shortcut_accelerator(
+    pub(super) fn set_shortcut_accelerator(
         &mut self,
         action: ShortcutAction,
-        accelerator: &'static str,
+        accelerator: &str,
         cx: &mut Context<Self>,
     ) {
         self.update_shortcuts_config(
             |cfg| {
                 let binding = Self::shortcut_binding_mut(cfg, action);
                 binding.accelerator = accelerator.to_string();
+            },
+            cx,
+        );
+    }
+
+    fn reset_shortcuts_to_defaults(&mut self, cx: &mut Context<Self>) {
+        self.recording_shortcut = None;
+        self.update_shortcuts_config(
+            |cfg| {
+                *cfg = crate::state::ShortcutsConfig::default();
             },
             cx,
         );
@@ -188,20 +198,21 @@ impl TrayPopoverView {
         self.update_auto_ducking_config(|cfg| cfg.release_ms = release_ms, cx);
     }
 
-    fn toggle_auto_ducking_app(&mut self, bundle_id: &str, is_voice: bool, cx: &mut Context<Self>) {
+    fn set_auto_ducking_app_role(
+        &mut self,
+        bundle_id: &str,
+        role: Option<bool>,
+        cx: &mut Context<Self>,
+    ) {
         let bid = bundle_id.to_string();
         self.update_auto_ducking_config(
             |cfg| {
-                let (primary, secondary) = if is_voice {
-                    (&mut cfg.voice_bundle_ids, &mut cfg.music_bundle_ids)
-                } else {
-                    (&mut cfg.music_bundle_ids, &mut cfg.voice_bundle_ids)
-                };
-                if let Some(pos) = primary.iter().position(|id| id == &bid) {
-                    primary.remove(pos);
-                } else {
-                    primary.push(bid.clone());
-                    secondary.retain(|id| id != &bid);
+                cfg.voice_bundle_ids.retain(|id| id != &bid);
+                cfg.music_bundle_ids.retain(|id| id != &bid);
+                match role {
+                    Some(true) => cfg.voice_bundle_ids.push(bid),
+                    Some(false) => cfg.music_bundle_ids.push(bid),
+                    None => {}
                 }
             },
             cx,
@@ -219,7 +230,7 @@ impl TrayPopoverView {
     ) -> impl IntoElement {
         div()
             .id(id)
-            .px(px(8.0))
+            .px(px(6.0))
             .py(px(3.0))
             .rounded_full()
             .cursor_pointer()
@@ -239,127 +250,157 @@ impl TrayPopoverView {
             .child(label)
     }
 
-    fn format_bundle_summary(&self, bundle_ids: &[String]) -> String {
-        if bundle_ids.is_empty() {
-            return String::from("None configured");
-        }
-        bundle_ids
-            .iter()
-            .map(|id| {
-                self.snapshot
-                    .apps
-                    .iter()
-                    .find(|app| app.info.bundle_id == *id)
-                    .map(|app| app.info.name.clone())
-                    .unwrap_or_else(|| id.rsplit('.').next().unwrap_or(id.as_str()).to_string())
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-
-    fn render_auto_ducking_app_group(
-        &self,
-        title: &'static str,
-        bundle_ids: &[String],
-        is_voice: bool,
-        palette: ThemePalette,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let summary = self.format_bundle_summary(bundle_ids);
-        let running_apps: Vec<(String, String, bool)> = self
+    fn friendly_bundle_name(&self, bundle_id: &str) -> String {
+        if let Some(app) = self
             .snapshot
             .apps
             .iter()
-            .filter(|row| row.info.is_running_output)
-            .map(|row| {
-                let selected = bundle_ids.iter().any(|id| id == &row.info.bundle_id);
-                (row.info.bundle_id.clone(), row.info.name.clone(), selected)
-            })
-            .collect();
+            .find(|app| app.info.bundle_id == bundle_id)
+        {
+            return app.info.name.clone();
+        }
+        match bundle_id {
+            "com.hnc.Discord" => String::from("Discord"),
+            "us.zoom.xos" => String::from("Zoom"),
+            "com.tinyspeck.slackmacgap" => String::from("Slack"),
+            "com.microsoft.teams2" => String::from("Teams"),
+            "com.apple.FaceTime" => String::from("FaceTime"),
+            "com.spotify.client" => String::from("Spotify"),
+            "com.apple.Music" => String::from("Music"),
+            "com.tidal.desktop" => String::from("TIDAL"),
+            "org.videolan.vlc" => String::from("VLC"),
+            _ => bundle_id
+                .rsplit('.')
+                .next()
+                .unwrap_or(bundle_id)
+                .to_string(),
+        }
+    }
 
-        let mut chips = div().w_full().flex().flex_wrap().gap(px(4.0));
-        if running_apps.is_empty() {
-            chips = chips.child(
-                div()
-                    .text_xs()
-                    .text_color(palette.text_secondary)
-                    .child("No active audio apps running"),
-            );
-        } else {
-            let prefix = if is_voice { "voice" } else { "music" };
-            for (bundle_id, name, selected) in running_apps {
-                let bid_for_click = bundle_id.clone();
-                chips = chips.child(
-                    div()
-                        .id(SharedString::from(format!("cfg-duck-{prefix}-{bundle_id}")))
-                        .px(px(8.0))
-                        .py(px(3.0))
-                        .rounded_full()
-                        .cursor_pointer()
-                        .bg(if selected {
-                            palette.accent_blue
-                        } else {
-                            palette.pill_bg
-                        })
-                        .hover(move |s| {
-                            if selected {
-                                s.bg(palette.accent_blue)
-                            } else {
-                                s.bg(palette.pill_hover_bg)
-                            }
-                        })
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(if selected {
-                            rgb(0xffffff)
-                        } else {
-                            palette.text_primary
-                        })
-                        .on_click(cx.listener(move |this, _event, _window, cx| {
-                            this.toggle_auto_ducking_app(&bid_for_click, is_voice, cx);
-                        }))
-                        .child(name),
-                );
+    fn render_auto_ducking_apps_rows(
+        &self,
+        palette: ThemePalette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let duck_cfg = &self.snapshot.auto_ducking;
+        let mut seen = std::collections::HashSet::new();
+        let mut entries: Vec<(String, String, Option<bool>)> = Vec::new();
+
+        for row in &self.snapshot.apps {
+            if row.info.is_running_output && seen.insert(row.info.bundle_id.clone()) {
+                let role = if duck_cfg
+                    .voice_bundle_ids
+                    .iter()
+                    .any(|id| id == &row.info.bundle_id)
+                {
+                    Some(true)
+                } else if duck_cfg
+                    .music_bundle_ids
+                    .iter()
+                    .any(|id| id == &row.info.bundle_id)
+                {
+                    Some(false)
+                } else {
+                    None
+                };
+                entries.push((row.info.bundle_id.clone(), row.info.name.clone(), role));
             }
         }
 
-        div()
-            .w_full()
-            .px(px(12.0))
-            .py(px(8.0))
-            .flex()
-            .flex_col()
-            .gap(px(5.0))
-            .child(
+        for id in &duck_cfg.voice_bundle_ids {
+            if seen.insert(id.clone()) {
+                entries.push((id.clone(), self.friendly_bundle_name(id), Some(true)));
+            }
+        }
+        for id in &duck_cfg.music_bundle_ids {
+            if seen.insert(id.clone()) {
+                entries.push((id.clone(), self.friendly_bundle_name(id), Some(false)));
+            }
+        }
+
+        let mut container = div().w_full().flex().flex_col();
+        if entries.is_empty() {
+            return container.child(
+                div()
+                    .px(px(12.0))
+                    .py(px(10.0))
+                    .text_xs()
+                    .text_color(palette.text_secondary)
+                    .child("Play audio in an app to assign its Voice or Music role."),
+            );
+        }
+
+        for (idx, (bundle_id, name, role)) in entries.into_iter().enumerate() {
+            if idx > 0 {
+                container = container.child(div().w_full().h(px(1.0)).bg(palette.divider));
+            }
+
+            let bid_off = bundle_id.clone();
+            let bid_voice = bundle_id.clone();
+            let bid_music = bundle_id.clone();
+
+            let role_pills = div()
+                .flex()
+                .items_center()
+                .flex_shrink_0()
+                .p(px(2.0))
+                .rounded_full()
+                .bg(palette.pill_bg)
+                .child(self.render_segmented_option(
+                    SharedString::from(format!("cfg-duck-role-off-{bundle_id}")),
+                    "Off",
+                    role.is_none(),
+                    palette,
+                    move |this, _event, _window, cx| {
+                        this.set_auto_ducking_app_role(&bid_off, None, cx);
+                    },
+                    cx,
+                ))
+                .child(self.render_segmented_option(
+                    SharedString::from(format!("cfg-duck-role-voice-{bundle_id}")),
+                    "Voice",
+                    role == Some(true),
+                    palette,
+                    move |this, _event, _window, cx| {
+                        this.set_auto_ducking_app_role(&bid_voice, Some(true), cx);
+                    },
+                    cx,
+                ))
+                .child(self.render_segmented_option(
+                    SharedString::from(format!("cfg-duck-role-music-{bundle_id}")),
+                    "Music",
+                    role == Some(false),
+                    palette,
+                    move |this, _event, _window, cx| {
+                        this.set_auto_ducking_app_role(&bid_music, Some(false), cx);
+                    },
+                    cx,
+                ));
+
+            container = container.child(
                 div()
                     .w_full()
+                    .px(px(12.0))
+                    .py(px(7.0))
                     .flex()
                     .items_center()
                     .justify_between()
                     .gap(px(8.0))
                     .child(
                         div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
                             .text_xs()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(palette.text_primary)
-                            .child(title),
+                            .child(name),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(palette.text_secondary)
-                            .child(format!("{} configured", bundle_ids.len())),
-                    ),
-            )
-            .child(
-                div()
-                    .w_full()
-                    .truncate()
-                    .text_xs()
-                    .text_color(palette.text_secondary)
-                    .child(summary),
-            )
-            .child(chips)
+                    .child(role_pills),
+            );
+        }
+
+        container
     }
 
     fn render_auto_ducking_section(
@@ -553,23 +594,18 @@ impl TrayPopoverView {
                             ),
                     )
                     .child(div().w_full().h(px(1.0)).bg(palette.divider))
-                    // Row 4: Voice apps
-                    .child(self.render_auto_ducking_app_group(
-                        "Voice apps",
-                        &duck_cfg.voice_bundle_ids,
-                        true,
-                        palette,
-                        cx,
-                    ))
-                    .child(div().w_full().h(px(1.0)).bg(palette.divider))
-                    // Row 5: Music apps
-                    .child(self.render_auto_ducking_app_group(
-                        "Music apps",
-                        &duck_cfg.music_bundle_ids,
-                        false,
-                        palette,
-                        cx,
-                    )),
+                    // Row 4: App roles (Off / Voice / Music)
+                    .child(
+                        div()
+                            .w_full()
+                            .px(px(12.0))
+                            .pt(px(8.0))
+                            .pb(px(2.0))
+                            .text_xs()
+                            .text_color(palette.text_secondary)
+                            .child("Voice apps lower Music apps when speaking:"),
+                    )
+                    .child(self.render_auto_ducking_apps_rows(palette, cx)),
             )
     }
 
@@ -1141,6 +1177,24 @@ impl TrayPopoverView {
             )
     }
 
+    fn format_accelerator_display(accel: &str) -> String {
+        let mut out = String::new();
+        for part in accel.split('+') {
+            match part.trim() {
+                "CmdOrCtrl" | "Cmd" | "Super" => out.push('⌘'),
+                "Ctrl" | "Control" => out.push('⌃'),
+                "Alt" | "Option" => out.push('⌥'),
+                "Shift" => out.push('⇧'),
+                other => out.push_str(other),
+            }
+        }
+        if out.is_empty() {
+            accel.to_string()
+        } else {
+            out
+        }
+    }
+
     fn render_settings_shortcuts_tab(
         &self,
         palette: ThemePalette,
@@ -1150,7 +1204,6 @@ impl TrayPopoverView {
             action: ShortcutAction,
             id_prefix: &'static str,
             label: &'static str,
-            presets: [(&'static str, &'static str); 2],
         }
 
         let global_specs = [
@@ -1158,19 +1211,16 @@ impl TrayPopoverView {
                 action: ShortcutAction::TogglePopover,
                 id_prefix: "toggle-popover",
                 label: "Toggle popover",
-                presets: [("⌘⇧O", "CmdOrCtrl+Shift+O"), ("⌥⇧O", "Alt+Shift+O")],
             },
             GlobalShortcutSpec {
                 action: ShortcutAction::MuteActiveApp,
                 id_prefix: "mute-active",
                 label: "Mute active app",
-                presets: [("⌘⇧M", "CmdOrCtrl+Shift+M"), ("⌥⇧M", "Alt+Shift+M")],
             },
             GlobalShortcutSpec {
                 action: ShortcutAction::CycleOutputDevice,
                 id_prefix: "cycle-output",
-                label: "Cycle output device",
-                presets: [("⌘⇧D", "CmdOrCtrl+Shift+D"), ("⌥⇧D", "Alt+Shift+D")],
+                label: "Cycle output",
             },
         ];
 
@@ -1189,28 +1239,55 @@ impl TrayPopoverView {
             }
             let binding = Self::shortcut_binding(&self.snapshot.shortcuts, spec.action);
             let action = spec.action;
+            let is_recording = self.recording_shortcut == Some(action);
+            let display_text = if is_recording {
+                String::from("Press keys…")
+            } else {
+                Self::format_accelerator_display(&binding.accelerator)
+            };
 
-            let mut pills = div()
-                .flex()
-                .items_center()
-                .p(px(2.0))
-                .rounded_full()
-                .bg(palette.pill_bg);
-
-            for (pill_idx, (display, accel)) in spec.presets.iter().enumerate() {
-                let is_selected = binding.accelerator == *accel;
-                let accel_value = *accel;
-                pills = pills.child(self.render_segmented_option(
-                    SharedString::from(format!("cfg-hotkey-{}-p{}", spec.id_prefix, pill_idx)),
-                    display,
-                    is_selected,
-                    palette,
-                    move |this, _event, _window, cx| {
-                        this.set_shortcut_accelerator(action, accel_value, cx);
-                    },
-                    cx,
-                ));
-            }
+            let shortcut_btn = div()
+                .id(SharedString::from(format!(
+                    "cfg-hotkey-{}-record",
+                    spec.id_prefix
+                )))
+                .px(px(9.0))
+                .py(px(3.0))
+                .rounded(px(6.0))
+                .cursor_pointer()
+                .bg(if is_recording {
+                    palette.accent_blue
+                } else {
+                    palette.pill_bg
+                })
+                .hover(move |s| {
+                    if is_recording {
+                        s.bg(palette.accent_blue)
+                    } else {
+                        s.bg(palette.pill_hover_bg)
+                    }
+                })
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(if is_recording {
+                    rgb(0xffffff)
+                } else {
+                    palette.text_secondary
+                })
+                .on_click(cx.listener(move |this, _event, window, cx| {
+                    let next = if this.recording_shortcut == Some(action) {
+                        None
+                    } else {
+                        window.focus(&this.focus_handle);
+                        Some(action)
+                    };
+                    this.recording_shortcut = next;
+                    if let Ok(mut hk) = this.hotkeys.lock() {
+                        hk.set_suspended(next.is_some());
+                    }
+                    cx.notify();
+                }))
+                .child(display_text);
 
             global_card = global_card.child(
                 div()
@@ -1220,25 +1297,34 @@ impl TrayPopoverView {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .gap(px(8.0))
+                    .gap(px(6.0))
                     .child(
                         div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
                             .text_xs()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(palette.text_primary)
                             .child(spec.label),
                     )
-                    .child(div().flex().items_center().gap(px(8.0)).child(pills).child(
-                        self.render_ios_toggle(
-                            SharedString::from(format!("cfg-hotkey-{}-toggle", spec.id_prefix)),
-                            binding.enabled,
-                            palette,
-                            move |this, _event, _window, cx| {
-                                this.toggle_shortcut_enabled(action, cx);
-                            },
-                            cx,
-                        ),
-                    )),
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .flex_shrink_0()
+                            .gap(px(8.0))
+                            .child(shortcut_btn)
+                            .child(self.render_ios_toggle(
+                                SharedString::from(format!("cfg-hotkey-{}-toggle", spec.id_prefix)),
+                                binding.enabled,
+                                palette,
+                                move |this, _event, _window, cx| {
+                                    this.toggle_shortcut_enabled(action, cx);
+                                },
+                                cx,
+                            )),
+                    ),
             );
         }
 
@@ -1305,10 +1391,34 @@ impl TrayPopoverView {
                     .gap(px(6.0))
                     .child(
                         div()
-                            .text_xs()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(palette.text_primary)
-                            .child("Global Shortcuts"),
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(palette.text_primary)
+                                    .child("Global Shortcuts"),
+                            )
+                            .child(
+                                div()
+                                    .id("cfg-hotkey-reset-defaults")
+                                    .px(px(8.0))
+                                    .py(px(3.0))
+                                    .rounded_full()
+                                    .bg(palette.pill_bg)
+                                    .hover(move |s| s.bg(palette.pill_hover_bg))
+                                    .cursor_pointer()
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(palette.text_secondary)
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.reset_shortcuts_to_defaults(cx);
+                                    }))
+                                    .child("Reset to defaults"),
+                            ),
                     )
                     .child(global_card),
             )

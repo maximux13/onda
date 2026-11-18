@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Context, FontWeight, Image, ImageFormat, SharedString, Window,
+    AnyElement, Context, FocusHandle, FontWeight, Image, ImageFormat, SharedString, Window,
     WindowBackgroundAppearance, div, px, rgb,
 };
 
@@ -50,6 +50,8 @@ pub struct TrayPopoverView {
     pub(super) show_input_picker: bool,
     pub(super) launch_at_login: bool,
     pub(super) view_transition_id: u64,
+    pub(super) recording_shortcut: Option<crate::state::ShortcutAction>,
+    pub(crate) focus_handle: FocusHandle,
     last_window_style: Option<WindowStyle>,
     last_is_dark: Option<bool>,
 }
@@ -81,6 +83,8 @@ impl TrayPopoverView {
             show_input_picker: false,
             launch_at_login: crate::launch_agent::is_launch_at_login_enabled(),
             view_transition_id: 0,
+            recording_shortcut: None,
+            focus_handle: cx.focus_handle(),
             last_window_style: None,
             last_is_dark: None,
         };
@@ -451,6 +455,33 @@ impl Render for TrayPopoverView {
         };
 
         let mut root = div()
+            .track_focus(&self.focus_handle)
+            .on_key_down(
+                cx.listener(|this, event: &gpui::KeyDownEvent, _window, cx| {
+                    let Some(action) = this.recording_shortcut else {
+                        return;
+                    };
+                    if event.keystroke.key == "escape" {
+                        this.recording_shortcut = None;
+                        if let Ok(mut hk) = this.hotkeys.lock() {
+                            hk.set_suspended(false);
+                        }
+                        cx.stop_propagation();
+                        cx.notify();
+                        return;
+                    }
+                    if let Some(accel) = keystroke_to_accelerator(&event.keystroke)
+                        && crate::hotkeys::parse_hotkey(&accel).is_ok()
+                    {
+                        this.set_shortcut_accelerator(action, &accel, cx);
+                        this.recording_shortcut = None;
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            .on_action(cx.listener(|_, _: &crate::ClosePopover, window, _| {
+                window.remove_window();
+            }))
             .w_full()
             .h_full()
             .flex()
@@ -468,4 +499,51 @@ impl Render for TrayPopoverView {
 
         root.child(div().flex_1().min_h_0().w_full().h_full().child(content))
     }
+}
+
+impl Drop for TrayPopoverView {
+    fn drop(&mut self) {
+        if self.recording_shortcut.is_some()
+            && let Ok(mut hk) = self.hotkeys.lock()
+        {
+            hk.set_suspended(false);
+        }
+    }
+}
+
+fn keystroke_to_accelerator(keystroke: &gpui::Keystroke) -> Option<String> {
+    let mods = &keystroke.modifiers;
+    if !mods.platform && !mods.control && !mods.alt && !mods.shift {
+        return None;
+    }
+
+    let key = match keystroke.key.as_str() {
+        "space" => String::from("Space"),
+        "enter" | "return" => String::from("Enter"),
+        "tab" => String::from("Tab"),
+        "backspace" => String::from("Backspace"),
+        "up" => String::from("ArrowUp"),
+        "down" => String::from("ArrowDown"),
+        "left" => String::from("ArrowLeft"),
+        "right" => String::from("ArrowRight"),
+        k if k.len() == 1 => k.to_ascii_uppercase(),
+        k if k.starts_with('f') && k[1..].parse::<u8>().is_ok() => k.to_ascii_uppercase(),
+        _ => return None,
+    };
+
+    let mut parts = Vec::new();
+    if mods.platform {
+        parts.push("CmdOrCtrl");
+    }
+    if mods.control {
+        parts.push("Ctrl");
+    }
+    if mods.alt {
+        parts.push("Alt");
+    }
+    if mods.shift {
+        parts.push("Shift");
+    }
+    parts.push(&key);
+    Some(parts.join("+"))
 }

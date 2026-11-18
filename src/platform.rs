@@ -40,21 +40,23 @@ impl Default for ScreenGeometry {
     }
 }
 
-/// Queries AppKit for the screen containing the current mouse cursor and
-/// derives display metrics needed for popover placement.
-fn query_active_screen_geometry() -> ScreenGeometry {
+/// Queries AppKit for the screen containing `anchor_point` (or the current mouse
+/// cursor if `None`) and derives display metrics needed for popover placement.
+fn query_active_screen_geometry(anchor_point: Option<(f64, f64)>) -> ScreenGeometry {
     MainThreadMarker::new()
         .and_then(|mtm| {
-            let mouse_loc = NSEvent::mouseLocation();
+            let target_loc = anchor_point
+                .map(|(x, y)| NSPoint::new(x, y))
+                .unwrap_or_else(NSEvent::mouseLocation);
             let screens = NSScreen::screens(mtm);
             screens
                 .iter()
                 .find(|s| {
                     let f = s.frame();
-                    mouse_loc.x >= f.origin.x
-                        && mouse_loc.x < f.origin.x + f.size.width
-                        && mouse_loc.y >= f.origin.y
-                        && mouse_loc.y < f.origin.y + f.size.height
+                    target_loc.x >= f.origin.x
+                        && target_loc.x < f.origin.x + f.size.width
+                        && target_loc.y >= f.origin.y
+                        && target_loc.y < f.origin.y + f.size.height
                 })
                 .map(|s| {
                     let f = s.frame();
@@ -62,7 +64,7 @@ fn query_active_screen_geometry() -> ScreenGeometry {
                     let menu_bar = (f.origin.y + f.size.height) - (vf.origin.y + vf.size.height);
                     let top_y_appkit = vf.origin.y + vf.size.height - MENU_BAR_GAP;
                     ScreenGeometry {
-                        mouse_x: mouse_loc.x,
+                        mouse_x: target_loc.x,
                         disp_ox: f.origin.x,
                         disp_w: f.size.width,
                         menu_bar_h: menu_bar.max(MIN_MENU_BAR_HEIGHT),
@@ -82,9 +84,14 @@ fn compute_clamped_x(mouse_x: f64, disp_ox: f64, disp_w: f64, width: f64) -> f64
 }
 
 /// Computes GPUI window placement and AppKit top-left coordinates for a tray
-/// popover of size `(width, height)` anchored near the current mouse location.
-pub fn compute_popover_placement(cx: &App, width: f64, height: f64) -> PopoverPlacement {
-    let screen = query_active_screen_geometry();
+/// popover of size `(width, height)` anchored below `anchor_point` (or the mouse cursor).
+pub fn compute_popover_placement(
+    cx: &App,
+    width: f64,
+    height: f64,
+    anchor_point: Option<(f64, f64)>,
+) -> PopoverPlacement {
+    let screen = query_active_screen_geometry(anchor_point);
 
     let target_display = cx
         .displays()

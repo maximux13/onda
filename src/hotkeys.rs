@@ -20,6 +20,8 @@ pub struct HotkeyManager {
     manager: Option<GlobalHotKeyManager>,
     registered: Vec<HotKey>,
     id_to_action: HashMap<u32, ShortcutAction>,
+    last_config: ShortcutsConfig,
+    suspended: bool,
 }
 
 impl HotkeyManager {
@@ -36,6 +38,8 @@ impl HotkeyManager {
             manager,
             registered: Vec::new(),
             id_to_action: HashMap::new(),
+            last_config: config.clone(),
+            suspended: false,
         };
         this.apply_config(config);
         this
@@ -43,6 +47,9 @@ impl HotkeyManager {
 
     /// Unregisters all previously registered hotkeys and registers enabled bindings from `config`.
     pub fn apply_config(&mut self, config: &ShortcutsConfig) {
+        self.last_config = config.clone();
+        self.suspended = false;
+
         let Some(manager) = self.manager.as_ref() else {
             self.registered.clear();
             self.id_to_action.clear();
@@ -84,6 +91,28 @@ impl HotkeyManager {
                 }
                 Err(err) => eprintln!("{err}"),
             }
+        }
+    }
+
+    /// Temporarily suspends or resumes global hotkey registration (e.g. while recording a custom shortcut).
+    pub fn set_suspended(&mut self, suspended: bool) {
+        if self.suspended == suspended {
+            return;
+        }
+        self.suspended = suspended;
+        if suspended {
+            if let Some(manager) = self.manager.as_ref()
+                && !self.registered.is_empty()
+            {
+                if let Err(err) = manager.unregister_all(&self.registered) {
+                    eprintln!("Failed to suspend global hotkeys: {err}");
+                }
+                self.registered.clear();
+            }
+            self.id_to_action.clear();
+        } else {
+            let cfg = self.last_config.clone();
+            self.apply_config(&cfg);
         }
     }
 

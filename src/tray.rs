@@ -31,6 +31,21 @@ pub struct TrayHandle {
     _tray_icon: TrayIcon,
 }
 
+impl TrayHandle {
+    /// Returns the `(center_x, center_y)` of the menu bar status item in AppKit screen points.
+    pub fn status_item_center(&self) -> Option<(f64, f64)> {
+        let mtm = MainThreadMarker::new()?;
+        let item = self._tray_icon.ns_status_item()?;
+        let button = item.button(mtm)?;
+        let window = button.window()?;
+        let frame = window.frame();
+        Some((
+            frame.origin.x + frame.size.width * 0.5,
+            frame.origin.y + frame.size.height * 0.5,
+        ))
+    }
+}
+
 /// Configures the macOS application as an accessory (menu-bar-only) app so it
 /// does not appear in the Dock or Cmd+Tab switcher.
 pub fn set_accessory_activation_policy() {
