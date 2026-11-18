@@ -38,7 +38,7 @@ fn main() {
             cx.spawn(async move |cx| {
                 cx.background_executor().timer(Duration::from_secs(3)).await;
                 loop {
-                    updater::UpdateController::trigger_check(Arc::clone(&updater_bg));
+                    updater::UpdateController::trigger_background_check(Arc::clone(&updater_bg));
                     cx.background_executor()
                         .timer(Duration::from_secs(6 * 3600))
                         .await;

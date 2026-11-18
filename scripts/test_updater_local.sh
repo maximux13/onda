@@ -17,7 +17,12 @@ echo "==> Copying Onda.app to $INSTALLED_DIR/Onda.app..."
 cp -R "target/debug/Onda.app" "$INSTALLED_DIR/Onda.app"
 
 echo "==> Creating mock release archive Onda-macos-arm64.zip (v$FAKE_VERSION)..."
-ditto -c -k --sequesterRsrc --keepParent "target/debug/Onda.app" "$MOCK_API_DIR/download/Onda-macos-arm64.zip"
+STAGED_APP="$TEST_ROOT/Staged/Onda.app"
+mkdir -p "$TEST_ROOT/Staged"
+cp -R "target/debug/Onda.app" "$STAGED_APP"
+plutil -replace CFBundleShortVersionString -string "$FAKE_VERSION" "$STAGED_APP/Contents/Info.plist"
+codesign --force --deep --sign - "$STAGED_APP"
+ditto -c -k --sequesterRsrc --keepParent "$STAGED_APP" "$MOCK_API_DIR/download/Onda-macos-arm64.zip"
 
 cat > "$MOCK_API_DIR/repos/maximux13/onda/releases" <<EOF
 [

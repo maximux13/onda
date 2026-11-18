@@ -1037,7 +1037,7 @@ impl TrayPopoverView {
                             .text_sm()
                             .font_weight(FontWeight::BOLD)
                             .text_color(palette.text_primary)
-                            .child(format!("Onda v{}", env!("CARGO_PKG_VERSION"))),
+                            .child(format!("Onda v{}", crate::updater::installed_app_version())),
                     )
                     .child(
                         div()

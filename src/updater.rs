@@ -34,10 +34,7 @@ impl UpdateConfig {
             repo_name: REPO_NAME.to_string(),
             bin_name: BIN_NAME.to_string(),
             bundle_name: BUNDLE_NAME.to_string(),
-            current_version: std::env::var("ONDA_UPDATE_CURRENT_VERSION")
-                .ok()
-                .filter(|v| !v.trim().is_empty())
-                .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
+            current_version: installed_app_version(),
             api_base_url: std::env::var("ONDA_UPDATE_API_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
@@ -79,6 +76,38 @@ pub fn is_newer_version(current: &str, candidate: &str) -> bool {
     let current_clean = current.trim().trim_start_matches('v');
     let candidate_clean = candidate.trim().trim_start_matches('v');
     self_update::version::bump_is_greater(current_clean, candidate_clean).unwrap_or(false)
+}
+
+/// Reads `CFBundleShortVersionString` from `<app_bundle>/Contents/Info.plist`, if present.
+pub fn bundle_short_version(app_bundle: &Path) -> Option<String> {
+    let plist = std::fs::read_to_string(app_bundle.join("Contents/Info.plist")).ok()?;
+    let (_, after_key) = plist.split_once("<key>CFBundleShortVersionString</key>")?;
+    let (_, after_open) = after_key.split_once("<string>")?;
+    let (version, _) = after_open.split_once("</string>")?;
+    let trimmed = version.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Returns the active app version, checking `ONDA_UPDATE_CURRENT_VERSION`, then the
+/// enclosing `.app` bundle's `Info.plist`, then the compile-time `CARGO_PKG_VERSION`.
+pub fn installed_app_version() -> String {
+    if let Ok(v) = std::env::var("ONDA_UPDATE_CURRENT_VERSION") {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(app_bundle) = find_enclosing_app_bundle(&exe)
+        && let Some(version) = bundle_short_version(&app_bundle)
+    {
+        return version;
+    }
+    env!("CARGO_PKG_VERSION").to_string()
 }
 
 /// Walks up from `exe_path` to find the enclosing `.app` bundle directory, if any.
@@ -207,8 +236,18 @@ impl UpdateController {
         self.state.clone()
     }
 
-    /// Spawns a background thread to check GitHub Releases if not already checking/downloading.
+    /// Spawns a manual check on a background thread (surfaces errors in `UpdateState::Error`).
     pub fn trigger_check(controller: Arc<Mutex<Self>>) {
+        Self::trigger_check_inner(controller, false);
+    }
+
+    /// Spawns a background check that stays silent (`UpdateState::Idle`) if the network is
+    /// unavailable or the release endpoint cannot be reached.
+    pub fn trigger_background_check(controller: Arc<Mutex<Self>>) {
+        Self::trigger_check_inner(controller, true);
+    }
+
+    fn trigger_check_inner(controller: Arc<Mutex<Self>>, silent_on_error: bool) {
         let config = {
             let Ok(mut guard) = controller.lock() else {
                 return;
@@ -227,6 +266,7 @@ impl UpdateController {
             let next_state = match check_for_updates(&config) {
                 Ok(Some(info)) => UpdateState::Available(info),
                 Ok(None) => UpdateState::UpToDate,
+                Err(_) if silent_on_error => UpdateState::Idle,
                 Err(err) => UpdateState::Error(err),
             };
             if let Ok(mut guard) = controller.lock() {
